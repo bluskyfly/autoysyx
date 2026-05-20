@@ -1,5 +1,7 @@
 """SQLite event store for the orchestrator."""
+import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_SQL = """
@@ -46,5 +48,51 @@ class Database:
         try:
             conn.executescript(SCHEMA_SQL)
             conn.commit()
+        finally:
+            conn.close()
+
+    def append_event(
+        self,
+        type: str,
+        task_id: str | None = None,
+        payload: dict | None = None,
+        ts: str | None = None,
+    ) -> int:
+        ts = ts or datetime.now(timezone.utc).isoformat()
+        payload_json = json.dumps(payload or {}, ensure_ascii=False)
+        conn = sqlite3.connect(str(self.path))
+        try:
+            cur = conn.execute(
+                "INSERT INTO events (ts, type, task_id, payload) VALUES (?, ?, ?, ?)",
+                (ts, type, task_id, payload_json),
+            )
+            conn.commit()
+            return cur.lastrowid
+        finally:
+            conn.close()
+
+    def list_events(self, task_id: str | None = None) -> list[dict]:
+        conn = sqlite3.connect(str(self.path))
+        conn.row_factory = sqlite3.Row
+        try:
+            if task_id is not None:
+                rows = conn.execute(
+                    "SELECT * FROM events WHERE task_id = ? ORDER BY id",
+                    (task_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM events ORDER BY id"
+                ).fetchall()
+            return [
+                {
+                    "id": r["id"],
+                    "ts": r["ts"],
+                    "type": r["type"],
+                    "task_id": r["task_id"],
+                    "payload": json.loads(r["payload"]),
+                }
+                for r in rows
+            ]
         finally:
             conn.close()
