@@ -18,6 +18,9 @@
 ## 历史错误 (空表示第一次)
 {{ previous_error_excerpt }}
 
+## 协作 debug 提示
+{{ escalation_hint }}
+
 ## 完成后必须输出 TASK_CONTRACT JSON
 用 `====TASK_CONTRACT_BEGIN====` 和 `====TASK_CONTRACT_END====` 包裹下列字段:
 

@@ -78,11 +78,14 @@ def test_full_dry_run_completes_two_tasks(tmp_path, monkeypatch):
 
 
 def test_dry_run_marks_failure_and_continues_to_exit_clean(tmp_path, monkeypatch):
-    """After max_attempts, task_failed is recorded but the run exits 0 (not hard-exit 1).
+    """After max_attempts, task lands in `needs_debug` (escalation) and run exits 0.
 
     Bug B fix: an exhausted task no longer terminates the orchestrator with sys.exit(1).
+    Escalation upgrade: instead of `task_failed`, the orchestrator emits
+    `task_needs_debug` and writes a bundle so a collaborator can debug + inject-hint.
     Outer loop calls pick_next_task again; with no other ready task, it returns None
-    and exits cleanly via 'all done or blocked'. The operator can `retry` and `resume`.
+    and exits cleanly via 'all done or blocked'. The operator can `inject-hint` or
+    `retry` and `resume`.
     """
     monkeypatch.chdir(tmp_path)
     (tmp_path / "tasks.yaml").write_text("""tasks:
@@ -113,12 +116,14 @@ def test_dry_run_marks_failure_and_continues_to_exit_clean(tmp_path, monkeypatch
         result = CliRunner().invoke(cli, ["run", "--max-tasks", "5"])
 
     assert result.exit_code == 0, result.output
-    assert "FAILED" in result.output
+    assert "NEEDS DEBUG" in result.output
     assert "all done or blocked" in result.output
     from orchestrator.db import Database
     db = Database(tmp_path / "orchestrator" / "state.db")
-    assert db.task_status("A") == "failed"
-    assert (tmp_path / "reports" / "A-FAILED.md").exists()
+    assert db.task_status("A") == "needs_debug"
+    # Escalation bundle must be on disk for collaborator analysis.
+    bundles = list((tmp_path / "escalations").glob("A-*"))
+    assert len(bundles) == 1, f"expected one bundle dir, got {bundles}"
 
 
 def test_codex_sees_staged_diff_not_empty(tmp_path, monkeypatch):

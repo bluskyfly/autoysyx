@@ -76,6 +76,28 @@ def retry(ctx: click.Context, task_id: str) -> None:
     click.echo(f"  reset to pending: {task_id}")
 
 
+@cli.command("inject-hint")
+@click.argument("task_id")
+@click.argument("hint_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.pass_context
+def inject_hint(ctx: click.Context, task_id: str, hint_file: Path) -> None:
+    """Drop a debug hint for TASK_ID and reset it for another attempt.
+
+    The hint is copied to prompts/_hints/<task_id>.md; the next assemble_prompt
+    call inlines it into the worker prompt. Use this after a task lands in the
+    'needs_debug' state, once you've analyzed the escalation bundle with codex.
+    """
+    root: Path = ctx.obj["root"]
+    db = _open_db(root)
+    hints_dir = root / "prompts" / "_hints"
+    hints_dir.mkdir(parents=True, exist_ok=True)
+    target = hints_dir / f"{task_id}.md"
+    target.write_text(hint_file.read_text(encoding="utf-8"), encoding="utf-8")
+    db.append_event(type="task_reset", task_id=task_id,
+                    payload={"reason": "hint injected", "hint_path": str(target)})
+    click.echo(f"  hint copied to {target.relative_to(root)}; {task_id} reset to pending")
+
+
 @cli.command()
 @click.pass_context
 def resume(ctx: click.Context) -> None:
@@ -192,12 +214,76 @@ def run(ctx: click.Context, max_tasks: int) -> None:
             done_count += 1
             break
         else:
-            # exhausted attempts — log failure and keep going so independent chains can proceed
-            db.append_event(type="task_failed", task_id=nxt.id,
-                            payload={"attempts": attempt_num})
+            # Exhausted attempts — instead of hard-failing, park in `needs_debug`
+            # and write an escalation bundle so a human/AI collaborator can
+            # diagnose and `inject-hint` to unblock. The task is NOT marked
+            # `failed` here, so dependents stay blocked until a hint arrives.
+            bundle_dir = _write_escalation_bundle(root, db, nxt, attempt_num, prior_errors)
+            db.append_event(type="task_needs_debug", task_id=nxt.id,
+                            payload={"attempts": attempt_num,
+                                     "bundle_dir": str(bundle_dir.relative_to(root))})
             generate_task_report(db, nxt, reports_dir)
-            click.echo(f"  ✗ {nxt.id} FAILED after {attempt_num} attempts", err=True)
+            click.echo(
+                f"  ⏸ {nxt.id} NEEDS DEBUG after {attempt_num} attempts — "
+                f"bundle: {bundle_dir.relative_to(root)}",
+                err=True,
+            )
             continue
+
+
+def _write_escalation_bundle(
+    root: Path,
+    db,
+    task,
+    attempts: int,
+    prior_errors: list[str],
+) -> Path:
+    """Dump the escalation context for `task` so a collaborator can debug.
+
+    Captures everything a fresh reviewer needs without poking the live DB:
+    the failed attempts' log excerpts, the worker's current staged diff,
+    git status, and a meta.json with task config.
+    """
+    import json
+    import subprocess
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    bundle = root / "escalations" / f"{task.id}-{stamp}"
+    bundle.mkdir(parents=True, exist_ok=True)
+
+    (bundle / "attempts.log").write_text(
+        "\n--- attempt boundary ---\n".join(prior_errors) or "(no prior errors recorded)",
+        encoding="utf-8",
+    )
+
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "HEAD"],
+        cwd=str(root), capture_output=True, text=True,
+    ).stdout or "(no staged changes)"
+    (bundle / "staged.patch").write_text(staged, encoding="utf-8")
+
+    status = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=str(root), capture_output=True, text=True,
+    ).stdout
+    (bundle / "git-status.txt").write_text(status, encoding="utf-8")
+
+    meta = {
+        "task_id": task.id,
+        "title": task.title,
+        "stage": task.stage,
+        "deps": task.deps,
+        "attempts_used": attempts,
+        "max_attempts": task.max_attempts,
+        "verification": task.verification,
+        "doc_refs": task.doc_refs,
+        "escalated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    (bundle / "meta.json").write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+    return bundle
 
 
 @cli.command()

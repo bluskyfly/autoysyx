@@ -146,6 +146,17 @@ def assemble_prompt(
     if prior_errors:
         error_block = "\n\n--- 历史错误日志 ---\n" + "\n---\n".join(prior_errors)
 
+    # Collaborative debug hint, dropped by `inject-hint` after an escalation.
+    # If prompts/_hints/<task_id>.md exists, inline it so the worker sees the
+    # human/AI analysis from the previous round.
+    hint_path = project_root / "prompts" / "_hints" / f"{task.id}.md"
+    hint_block = ""
+    if hint_path.exists():
+        hint_block = (
+            "\n\n--- 协作 debug 提示 (人工/AI 注入，优先于历史错误) ---\n"
+            + hint_path.read_text(encoding="utf-8")
+        )
+
     substitutions = {
         "task_id": task.id,
         "title": task.title,
@@ -153,6 +164,7 @@ def assemble_prompt(
         "docs_content": "\n".join(docs_content) or "(no documentation references)",
         "immutable_files": ", ".join(task.immutable_files) or "(none)",
         "previous_error_excerpt": error_block,
+        "escalation_hint": hint_block,
         "project_root": str(project_root),
         "work_dir": str(project_root / "ysyx-workbench"),
     }

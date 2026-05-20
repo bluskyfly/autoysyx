@@ -44,6 +44,10 @@ _TERMINAL_EVENTS = {
     "task_failed": "failed",
     "task_skipped": "skipped",
     "task_reset": "pending",
+    # `needs_debug`: max_attempts exhausted but the task isn't hard-failed —
+    # it's parked waiting for a human/AI hint to land (via `inject-hint`),
+    # which resets the task to `pending` so the worker can retry with context.
+    "task_needs_debug": "needs_debug",
 }
 
 
