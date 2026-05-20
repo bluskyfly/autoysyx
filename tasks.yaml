@@ -90,3 +90,255 @@ tasks:
       steps:
         - { cmd: "test -f ysyx-workbench/logisim/miniRV.circ", expect_exit: 0 }
         - { cmd: "bash test_runner/F6.sh", expect_exit: 0, expect_grep: ["miniRV PASS"] }
+
+  # ===== Stage E: 核心技术 =====
+  - id: E1
+    title: C 语言程序设计 (基础检查)
+    stage: E
+    deps: [F6]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/e/1.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "test -f ysyx-workbench/practice/c_basics.c", expect_exit: 0 }
+        - { cmd: "cd ysyx-workbench/practice && make c_basics && ./c_basics", expect_exit: 0 }
+
+  - id: E2
+    title: 硬件描述语言 (Verilog 基础)
+    stage: E
+    deps: [E1]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/2407/e/2.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "test -f ysyx-workbench/practice/dff.v", expect_exit: 0 }
+        - { cmd: "verilator --lint-only ysyx-workbench/practice/dff.v", expect_exit: 0 }
+
+  - id: E3
+    title: Linux 系统基本使用 (env smoke)
+    stage: E
+    deps: [E2]
+    estimated_minutes: 30
+    doc_refs: ["docs-md/2407/e/3.md"]
+    verification:
+      type: doc_artifact
+      steps:
+        - { cmd: "test -f reports/E3.md", expect_exit: 0 }
+
+  - id: E4a
+    title: 从 C 代码到二进制 — 编译过程
+    stage: E
+    deps: [E3]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/e/4.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "test -f ysyx-workbench/practice/hello.elf", expect_exit: 0 }
+        - { cmd: "riscv32-unknown-elf-objdump -d ysyx-workbench/practice/hello.elf | head -50",
+            expect_exit: 0, expect_grep: ["main"] }
+
+  - id: E4b
+    title: 从 C 代码到二进制 — 链接器脚本与运行时
+    stage: E
+    deps: [E4a]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/e/4.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "test -f ysyx-workbench/practice/linker.ld", expect_exit: 0 }
+        - { cmd: "grep -q '_start' ysyx-workbench/practice/linker.ld", expect_exit: 0 }
+
+  - id: E5
+    title: 从 RTL 到可流片版图 (yosys smoke)
+    stage: E
+    deps: [E4b]
+    estimated_minutes: 90
+    doc_refs: ["docs-md/2407/e/5.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/practice && yosys -p 'read_verilog dff.v; synth -top dff'",
+            expect_exit: 0, expect_grep: ["synth"] }
+
+  - id: E6
+    title: 完成 PA1 (NEMU calculator + 表达式求值)
+    stage: E
+    deps: [E5]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/2407/e/6.md", "docs-md/ics-pa/PA1.md",
+               "docs-md/ics-pa/1.4.md", "docs-md/ics-pa/1.5.md", "docs-md/ics-pa/1.6.md"]
+    immutable_files:
+      - ysyx-workbench/nemu/tests/sdb-tests/
+    verification:
+      type: multi_step
+      pre_steps:
+        - { cmd: "cd ysyx-workbench/nemu && make clean", expect_exit: 0 }
+      steps:
+        - { cmd: "cd ysyx-workbench/nemu && make ARCH=riscv32-nemu", expect_exit: 0 }
+        - { cmd: "cd ysyx-workbench/nemu && make ARCH=riscv32-nemu test-sdb",
+            expect_exit: 0, expect_grep: ["sdb PASS"], timeout_sec: 600 }
+
+  # ===== Stage D: NEMU/AM/RTL miniRV =====
+  - id: D1a
+    title: NEMU 支持 RV32I 基础指令集
+    stage: D
+    deps: [E6]
+    estimated_minutes: 240
+    doc_refs: ["docs-md/2407/d/1.md", "docs-md/ics-pa/PA2.md",
+               "docs-md/ics-pa/2.1.md", "docs-md/ics-pa/2.2.md", "docs-md/ics-pa/2.3.md"]
+    immutable_files:
+      - ysyx-workbench/nemu/tests/cpu-tests/
+      - ysyx-workbench/nemu/Makefile
+    verification:
+      type: multi_step
+      pre_steps:
+        - { cmd: "cd ysyx-workbench/nemu && make clean", expect_exit: 0 }
+      steps:
+        - { cmd: "cd ysyx-workbench/nemu && make ARCH=riscv32-nemu run-cpu-tests-rv32i",
+            expect_exit: 0, expect_grep: ["ALL", "PASS"], timeout_sec: 1800 }
+
+  - id: D1b
+    title: NEMU 支持 M 扩展 (乘除法)
+    stage: D
+    deps: [D1a]
+    estimated_minutes: 90
+    doc_refs: ["docs-md/2407/d/1.md"]
+    immutable_files: [ysyx-workbench/nemu/tests/cpu-tests/]
+    verification:
+      type: multi_step
+      pre_steps:
+        - { cmd: "cd ysyx-workbench/nemu && make clean", expect_exit: 0 }
+      steps:
+        - { cmd: "cd ysyx-workbench/nemu && make ARCH=riscv32-nemu run-cpu-tests-m",
+            expect_exit: 0, expect_grep: ["PASS"], timeout_sec: 1800 }
+
+  - id: D1c
+    title: NEMU 支持 Zicsr + ecall
+    stage: D
+    deps: [D1b]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/d/1.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/nemu && make ARCH=riscv32-nemu run-csr-tests",
+            expect_exit: 0, expect_grep: ["PASS"], timeout_sec: 600 }
+
+  - id: D2
+    title: 完成 PA2 (程序的机器级表示 + AM 移植)
+    stage: D
+    deps: [D1c]
+    estimated_minutes: 180
+    doc_refs: ["docs-md/2407/d/2.md", "docs-md/ics-pa/PA2.md",
+               "docs-md/ics-pa/2.4.md", "docs-md/ics-pa/2.5.md"]
+    immutable_files: [ysyx-workbench/abstract-machine/am/tests/]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/am-kernels/tests/cpu-tests && make ARCH=riscv32-nemu run",
+            expect_exit: 0, expect_grep: ["HIT GOOD TRAP"], timeout_sec: 1200 }
+
+  - id: D3a
+    title: AM 运行时环境 — IOE 抽象
+    stage: D
+    deps: [D2]
+    estimated_minutes: 90
+    doc_refs: ["docs-md/2407/d/3.md", "docs-md/ics-pa/PA3.md", "docs-md/ics-pa/3.1.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/am-kernels/tests/am-tests && make ARCH=riscv32-nemu run",
+            expect_exit: 0, expect_grep: ["AM PASS"], timeout_sec: 600 }
+
+  - id: D3b
+    title: AM 运行时环境 — Navy 应用 (nanos-lite + syscalls)
+    stage: D
+    deps: [D3a]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/ics-pa/3.2.md", "docs-md/ics-pa/3.3.md", "docs-md/ics-pa/3.4.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/nanos-lite && make ARCH=riscv32-nemu run",
+            expect_exit: 0, expect_grep: ["nanos-lite startup"], timeout_sec: 600 }
+
+  - id: D4
+    title: 用 RTL 实现迷你 RISC-V 处理器 (NPC miniRV)
+    stage: D
+    deps: [D1c, D3a]
+    estimated_minutes: 180
+    doc_refs: ["docs-md/2407/d/4.md"]
+    immutable_files: [ysyx-workbench/npc/tests/]
+    verification:
+      type: multi_step
+      pre_steps:
+        - { cmd: "cd ysyx-workbench/npc && make clean", expect_exit: 0 }
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make sim", expect_exit: 0, timeout_sec: 1200 }
+        - { cmd: "YSYX_WORKBENCH=$(pwd)/ysyx-workbench bash test_runner/difftest/run-difftest.sh",
+            expect_exit: 0, expect_grep: ["DIFFTEST: passed"], timeout_sec: 1800 }
+
+  - id: D5
+    title: 设备和输入输出 (VGA/键盘/timer)
+    stage: D
+    deps: [D4]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/2407/d/5.md", "docs-md/ics-pa/2.5.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/am-kernels/kernels/typing-game && make ARCH=riscv32-npc run",
+            expect_exit: 0, expect_grep: ["typing-game ready"], timeout_sec: 600 }
+
+  - id: D6a
+    title: D 阶段流片 — NPC 接入 ysyxSoC
+    stage: D
+    deps: [D5]
+    estimated_minutes: 90
+    doc_refs: ["docs-md/2407/d/6.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make sim-soc", expect_exit: 0, timeout_sec: 1200 }
+
+  - id: D6b
+    title: D 阶段流片 — 综合可收敛 (yosys 无 latch)
+    stage: D
+    deps: [D6a]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/2407/d/6.md", "docs-md/2407/e/5.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make yosys-synth 2>&1 | tee /tmp/syn.log",
+            expect_exit: 0, timeout_sec: 1800 }
+        - { cmd: "! grep -E 'latch|multiple drivers' /tmp/syn.log",
+            expect_exit: 0 }
+
+  - id: D6c
+    title: D 阶段流片 — hello world on ysyxSoC
+    stage: D
+    deps: [D6a]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/d/6.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench && bash scripts/run_d6_hello.sh",
+            expect_exit: 0, expect_grep: ["Hello World!"], timeout_sec: 1200 }
+
+  - id: D6d
+    title: D 阶段流片 — 字符版超级玛丽 on ysyxSoC
+    stage: D
+    deps: [D6c]
+    estimated_minutes: 90
+    doc_refs: ["docs-md/2407/d/6.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench && bash scripts/run_d6_mario.sh",
+            expect_exit: 0, expect_grep: ["Mario"], timeout_sec: 1800 }
