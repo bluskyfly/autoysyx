@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .contract import ContractError, extract_contract
+from .tasks import Task
 
 
 class WorkerTimeout(Exception):
@@ -72,7 +73,7 @@ def run_worker(
     for d in add_dirs or []:
         args += ["--add-dir", str(d)]
     if system_prompt_file is not None:
-        args += ["--append-system-prompt", system_prompt_file.read_text()]
+        args += ["--append-system-prompt-file", str(system_prompt_file)]
     args += ["-p", prompt]
 
     exit_code, stdout, stderr = _spawn_claude(args, "", work_dir, timeout_sec)
@@ -112,11 +113,53 @@ def run_worker(
         raw_stderr=stderr,
         api_error=api_error,
         session_id=envelope.get("session_id"),
-        cost_usd=float(envelope.get("total_cost_usd", 0.0)),
-        duration_ms=int(envelope.get("duration_ms", 0)),
+        cost_usd=float(envelope.get("total_cost_usd") or 0.0),
+        duration_ms=int(envelope.get("duration_ms") or 0),
         contract=contract,
         contract_error=contract_error,
     )
+
+
+def assemble_prompt(
+    template_path: Path,
+    task: Task,
+    project_root: Path,
+    prior_errors: list[str],
+) -> str:
+    """Render a worker prompt by substituting `{{ var }}` slots in a template.
+
+    Variables:
+      task_id, title, stage     -- from the Task dataclass.
+      docs_content              -- inlined content of every existing doc_refs file.
+      immutable_files           -- comma-joined task.immutable_files.
+      previous_error_excerpt    -- formatted block from prior_errors (empty if none).
+      project_root, work_dir    -- absolute paths shown to the worker.
+    """
+    template = template_path.read_text(encoding="utf-8")
+    docs_content = []
+    for ref in task.doc_refs:
+        ref_path = (project_root / ref).resolve() if not Path(ref).is_absolute() else Path(ref)
+        if ref_path.exists():
+            docs_content.append(f"\n### {ref}\n\n{ref_path.read_text(encoding='utf-8')}")
+
+    error_block = ""
+    if prior_errors:
+        error_block = "\n\n--- 历史错误日志 ---\n" + "\n---\n".join(prior_errors)
+
+    substitutions = {
+        "task_id": task.id,
+        "title": task.title,
+        "stage": task.stage,
+        "docs_content": "\n".join(docs_content) or "(no documentation references)",
+        "immutable_files": ", ".join(task.immutable_files) or "(none)",
+        "previous_error_excerpt": error_block,
+        "project_root": str(project_root),
+        "work_dir": str(project_root / "ysyx-workbench"),
+    }
+    out = template
+    for key, val in substitutions.items():
+        out = out.replace("{{ " + key + " }}", str(val))
+    return out
 
 
 def shell_command_preview(args: list[str]) -> str:
