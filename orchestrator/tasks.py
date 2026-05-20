@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from .db import Database
+
 
 class TasksFileError(Exception):
     """Raised when tasks.yaml is missing, malformed, or fails schema check."""
@@ -163,4 +165,21 @@ def detect_cycle(tasks: list[Task]) -> list[str] | None:
             found = dfs(t.id)
             if found:
                 return found
+    return None
+
+
+def pick_next_task(db: Database, tasks: list[Task]) -> Task | None:
+    """Return the first task ready to run, or None if nothing ready / all done.
+
+    A task is ready when:
+      - its own status is 'pending', AND
+      - all deps are 'completed' or 'skipped'.
+    """
+    ordered = topological_order(tasks)
+    for t in ordered:
+        status = db.task_status(t.id)
+        if status != "pending":
+            continue
+        if all(db.task_status(d) in ("completed", "skipped") for d in t.deps):
+            return t
     return None

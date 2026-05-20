@@ -3,11 +3,13 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.db import Database
 from orchestrator.tasks import (
     Task,
     TasksFileError,
     detect_cycle,
     load_tasks,
+    pick_next_task,
     topological_order,
 )
 
@@ -114,3 +116,69 @@ def test_topological_order_raises_on_unknown_dep():
     a = Task(id="A", title="a", stage="X", deps=["NOPE"])
     with pytest.raises(TasksFileError, match="unknown dep"):
         topological_order([a])
+
+
+def test_pick_next_task_returns_first_pending_with_deps_met(tmp_db_path):
+    db = Database(tmp_db_path)
+    db.init_schema()
+    tasks = load_tasks(FIXTURE_DIR / "minimal_tasks.yaml")
+
+    # All pending, no deps for PHASE0 -> pick PHASE0
+    nxt = pick_next_task(db, tasks)
+    assert nxt is not None and nxt.id == "PHASE0"
+
+
+def test_pick_next_task_blocks_until_dep_completes(tmp_db_path):
+    db = Database(tmp_db_path)
+    db.init_schema()
+    tasks = load_tasks(FIXTURE_DIR / "minimal_tasks.yaml")
+
+    db.append_event(type="task_started", task_id="PHASE0")
+    # PHASE0 running, F1 blocked
+    nxt = pick_next_task(db, tasks)
+    assert nxt is None  # nothing ready (PHASE0 still running)
+
+
+def test_pick_next_task_advances_after_completion(tmp_db_path):
+    db = Database(tmp_db_path)
+    db.init_schema()
+    tasks = load_tasks(FIXTURE_DIR / "minimal_tasks.yaml")
+
+    db.append_event(type="task_started", task_id="PHASE0")
+    db.append_event(type="task_done", task_id="PHASE0")
+    nxt = pick_next_task(db, tasks)
+    assert nxt is not None and nxt.id == "F1"
+
+
+def test_pick_next_task_returns_none_when_all_done(tmp_db_path):
+    db = Database(tmp_db_path)
+    db.init_schema()
+    tasks = load_tasks(FIXTURE_DIR / "minimal_tasks.yaml")
+
+    for tid in ["PHASE0", "F1", "F2"]:
+        db.append_event(type="task_started", task_id=tid)
+        db.append_event(type="task_done", task_id=tid)
+    assert pick_next_task(db, tasks) is None
+
+
+def test_pick_next_task_skips_failed_tasks_blocking_chain(tmp_db_path):
+    """If a task is failed, its dependents stay pending; pick_next returns None."""
+    db = Database(tmp_db_path)
+    db.init_schema()
+    tasks = load_tasks(FIXTURE_DIR / "minimal_tasks.yaml")
+
+    db.append_event(type="task_started", task_id="PHASE0")
+    db.append_event(type="task_failed", task_id="PHASE0")
+    # F1 depends on PHASE0 which failed; F2 depends on F1.
+    assert pick_next_task(db, tasks) is None
+
+
+def test_pick_next_task_treats_skipped_as_satisfied(tmp_db_path):
+    """User-marked 'skipped' satisfies dependency to unblock chain."""
+    db = Database(tmp_db_path)
+    db.init_schema()
+    tasks = load_tasks(FIXTURE_DIR / "minimal_tasks.yaml")
+
+    db.append_event(type="task_skipped", task_id="PHASE0")
+    nxt = pick_next_task(db, tasks)
+    assert nxt is not None and nxt.id == "F1"
