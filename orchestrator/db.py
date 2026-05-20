@@ -38,6 +38,14 @@ CREATE TABLE IF NOT EXISTS env_lock (
 );
 """
 
+# Terminal events take precedence over earlier ones — most recent wins.
+_TERMINAL_EVENTS = {
+    "task_done": "completed",
+    "task_failed": "failed",
+    "task_skipped": "skipped",
+    "task_reset": "pending",
+}
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -96,3 +104,21 @@ class Database:
             ]
         finally:
             conn.close()
+
+    def task_status(self, task_id: str) -> str:
+        """Project current task status from its event stream.
+
+        Status precedence: most recent terminal event wins; if only `task_started`
+        seen, status is 'running'; if no events at all, status is 'pending'.
+        """
+        events = self.list_events(task_id=task_id)
+        if not events:
+            return "pending"
+        # Walk newest-first to find first terminal event.
+        for ev in reversed(events):
+            if ev["type"] in _TERMINAL_EVENTS:
+                return _TERMINAL_EVENTS[ev["type"]]
+        # No terminal seen; if started, we're running.
+        if any(e["type"] == "task_started" for e in events):
+            return "running"
+        return "pending"
