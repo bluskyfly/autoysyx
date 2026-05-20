@@ -1,0 +1,92 @@
+# autoysyx tasks.yaml — single source of truth for the 44 work items.
+# DO NOT modify after orchestrator has started running tasks; treat as immutable.
+
+tasks:
+  # ===== Phase 0: Bootstrap =====
+  - id: PHASE0
+    title: Bootstrap toolchain & ysyx-workbench clone
+    stage: phase0
+    deps: []
+    estimated_minutes: 30
+    doc_refs: []
+    verification:
+      type: env_lock_complete
+      steps:
+        - { cmd: "bash tools/check_env.sh", expect_exit: 0, expect_grep: ["env check OK"] }
+        - { cmd: "test -d ysyx-workbench/nemu", expect_exit: 0 }
+        - { cmd: "test -d ysyx-workbench/ysyxSoC", expect_exit: 0 }
+
+  # ===== Stage F: 基础理论 =====
+  - id: F1
+    title: 如何科学地提问 (写 reports/F1.md)
+    stage: F
+    deps: [PHASE0]
+    estimated_minutes: 20
+    doc_refs: ["docs-md/2407/f/1.md"]
+    verification:
+      type: doc_artifact
+      steps:
+        - { cmd: "test -f reports/F1.md", expect_exit: 0 }
+        - { cmd: "grep -qE '提问模板|STFW|RTFM' reports/F1.md", expect_exit: 0 }
+
+  - id: F2
+    title: Logisim 安装与基本使用
+    stage: F
+    deps: [F1]
+    estimated_minutes: 30
+    doc_refs: ["docs-md/2407/f/2.md"]
+    immutable_files: []
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "command -v logisim || command -v logisim-evolution", expect_exit: 0 }
+        - { cmd: "test -f ysyx-workbench/logisim/example.circ", expect_exit: 0 }
+
+  - id: F3
+    title: 数字逻辑电路基础 (Logisim 电路)
+    stage: F
+    deps: [F2]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/f/3.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "ls ysyx-workbench/logisim/combinational/*.circ | wc -l", expect_exit: 0,
+            expect_grep: [] }
+        - { cmd: "ls ysyx-workbench/logisim/sequential/*.circ | wc -l", expect_exit: 0 }
+
+  - id: F4
+    title: 计算机系统的状态机模型
+    stage: F
+    deps: [F3]
+    estimated_minutes: 30
+    doc_refs: ["docs-md/2407/f/4.md"]
+    verification:
+      type: doc_artifact
+      steps:
+        - { cmd: "test -f reports/F4.md", expect_exit: 0 }
+        - { cmd: "grep -q 'TRM' reports/F4.md", expect_exit: 0 }
+
+  - id: F5
+    title: 支持数列求和的简单处理器 (Logisim)
+    stage: F
+    deps: [F4]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/f/5.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "test -f ysyx-workbench/logisim/sCPU.circ", expect_exit: 0 }
+        - { cmd: "bash test_runner/F5.sh", expect_exit: 0, expect_grep: ["sCPU PASS"] }
+
+  - id: F6
+    title: 功能完备的迷你 RISC-V 处理器 (Logisim)
+    stage: F
+    deps: [F5]
+    estimated_minutes: 90
+    doc_refs: ["docs-md/2407/f/6.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "test -f ysyx-workbench/logisim/miniRV.circ", expect_exit: 0 }
+        - { cmd: "bash test_runner/F6.sh", expect_exit: 0, expect_grep: ["miniRV PASS"] }
