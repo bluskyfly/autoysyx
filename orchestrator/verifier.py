@@ -171,3 +171,20 @@ def verify_task(
         return VerifyResult(passed=True, log_path=str(log_path))
 
     return run_verification_steps(steps, cwd=cwd, log_path=log_path)
+
+
+def run_difftest(
+    script_path: Path,
+    cwd: Path,
+    timeout_sec: int = 1800,
+) -> VerifyResult:
+    """Run the difftest wrapper script and require 'DIFFTEST: passed' in output."""
+    return run_verification_steps(
+        steps=[{
+            "cmd": f"bash {shlex.quote(str(script_path))}",
+            "expect_exit": 0,
+            "expect_grep": ["DIFFTEST: passed"],
+            "timeout_sec": timeout_sec,
+        }],
+        cwd=cwd,
+    )

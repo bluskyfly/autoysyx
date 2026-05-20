@@ -8,6 +8,7 @@ from orchestrator.verifier import (
     ImmutableViolation,
     VerifyResult,
     check_immutable_files,
+    run_difftest,
     run_verification_steps,
     snapshot_immutable_files,
     verify_task,
@@ -122,3 +123,30 @@ def test_verify_task_returns_immutable_violation(tmp_path: Path):
     result = verify_task(task, cwd=tmp_path, immutable_baseline=baseline)
     assert not result.passed
     assert result.fail_category == "immutable_modified"
+
+
+def test_run_difftest_calls_script_and_parses_output(tmp_path: Path):
+    """difftest script must return exit 0 + emit 'DIFFTEST: passed'."""
+    fake_script = tmp_path / "df.sh"
+    fake_script.write_text("#!/bin/bash\necho DIFFTEST: passed\nexit 0\n")
+    fake_script.chmod(0o755)
+    result = run_difftest(script_path=fake_script, cwd=tmp_path)
+    assert result.passed
+
+
+def test_run_difftest_fails_when_diff_marker_missing(tmp_path: Path):
+    fake_script = tmp_path / "df.sh"
+    fake_script.write_text("#!/bin/bash\necho silent success\nexit 0\n")
+    fake_script.chmod(0o755)
+    result = run_difftest(script_path=fake_script, cwd=tmp_path)
+    assert not result.passed
+    assert result.fail_category == "grep_miss"
+
+
+def test_run_difftest_fails_on_nonzero_exit(tmp_path: Path):
+    fake_script = tmp_path / "df.sh"
+    fake_script.write_text("#!/bin/bash\necho DIFFTEST: passed\nexit 1\n")
+    fake_script.chmod(0o755)
+    result = run_difftest(script_path=fake_script, cwd=tmp_path)
+    assert not result.passed
+    assert result.fail_category == "exit_mismatch"
