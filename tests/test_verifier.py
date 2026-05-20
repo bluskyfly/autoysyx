@@ -3,11 +3,14 @@ from pathlib import Path
 
 import pytest
 
+from orchestrator.tasks import Task
 from orchestrator.verifier import (
     ImmutableViolation,
     VerifyResult,
     check_immutable_files,
     run_verification_steps,
+    snapshot_immutable_files,
+    verify_task,
 )
 
 
@@ -83,3 +86,39 @@ def test_check_immutable_files_treats_delete_as_violation(tmp_path: Path):
     baseline = {str(f): _hash(f)}
     f.unlink()
     assert check_immutable_files(baseline) == [str(f)]
+
+
+def test_verify_task_runs_pre_steps_then_verify(tmp_path: Path):
+    """A task with a 'pre' step (e.g., make clean) should run it before verify."""
+    task = Task(
+        id="X", title="x", stage="X",
+        verification={
+            "type": "multi_step",
+            "pre_steps": [{"cmd": f"echo PRE > {tmp_path}/marker.txt"}],
+            "steps": [{"cmd": f"cat {tmp_path}/marker.txt",
+                       "expect_exit": 0, "expect_grep": ["PRE"]}],
+        },
+    )
+    result = verify_task(task, cwd=tmp_path)
+    assert result.passed
+
+
+def test_verify_task_returns_immutable_violation(tmp_path: Path):
+    """If immutable files were modified during worker run, fail before steps."""
+    locked = tmp_path / "test_runner" / "F1.sh"
+    locked.parent.mkdir(parents=True)
+    locked.write_text("baseline\n")
+
+    task = Task(
+        id="F1", title="x", stage="F",
+        immutable_files=[str(locked)],
+        verification={"type": "multi_step", "steps": [{"cmd": "true"}]},
+    )
+
+    baseline = snapshot_immutable_files([locked])
+    # Worker "modified" the locked file
+    locked.write_text("MODIFIED\n")
+
+    result = verify_task(task, cwd=tmp_path, immutable_baseline=baseline)
+    assert not result.passed
+    assert result.fail_category == "immutable_modified"

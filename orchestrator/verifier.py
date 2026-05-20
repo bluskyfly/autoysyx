@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .tasks import Task
+
 
 class ImmutableViolation(Exception):
     """Raised when an immutable file has been modified or deleted."""
@@ -128,3 +130,44 @@ def check_immutable_files(baseline: dict[str, str]) -> list[str]:
         if hash_file(p) != expected_hash:
             violations.append(path_str)
     return violations
+
+
+def verify_task(
+    task: Task,
+    cwd: Path,
+    immutable_baseline: dict[str, str] | None = None,
+    log_dir: Path | None = None,
+) -> VerifyResult:
+    """Top-level verification entry: immutable check + pre_steps + steps."""
+    log_dir = log_dir or (cwd / "reports" / "_verify")
+    log_path = log_dir / f"{task.id}.verify.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. immutable check
+    if immutable_baseline:
+        violations = check_immutable_files(immutable_baseline)
+        if violations:
+            return VerifyResult(
+                passed=False,
+                fail_category="immutable_modified",
+                log_path=str(log_path),
+                failing_step={"violations": violations},
+            )
+
+    spec = task.verification or {}
+    pre_steps = list(spec.get("pre_steps", []))
+    steps = list(spec.get("steps", []))
+
+    # 2. pre_steps (e.g., make clean) — fail of pre = setup error, classify differently
+    if pre_steps:
+        pre_result = run_verification_steps(pre_steps, cwd=cwd, log_path=log_path)
+        if not pre_result.passed:
+            pre_result.fail_category = "pre_step_failed"
+            return pre_result
+
+    # 3. actual verification steps
+    if not steps:
+        # Tasks like F1 (doc only) may have no steps; trust the type-specific check.
+        return VerifyResult(passed=True, log_path=str(log_path))
+
+    return run_verification_steps(steps, cwd=cwd, log_path=log_path)
