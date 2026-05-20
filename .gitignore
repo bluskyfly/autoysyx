@@ -14,3 +14,7 @@ ysyx-workbench/
 reports/
 .humanize/
 .cache/
+.autoysyx/
+docs-mirror/
+out/
+tools/bootstrap.log
