@@ -43,6 +43,23 @@ _REJECT_PATTERNS = [
     r"不能合并", r"do not merge", r"反对", r"reject",
 ]
 
+# Inconclusive markers: codex says it can't form a judgment because the diff
+# is empty / missing. Worker-side tasks that only touch .gitignore'd paths
+# (e.g. ysyx-workbench/) produce an empty staged diff. Codex sometimes prefixes
+# its "I can't review nothing" reply with `必须修复:` which would otherwise
+# trip the reject heuristic above. Treat any of these as a skipped review
+# (same outcome as codex CLI failure), NOT a rejection.
+_INCONCLUSIVE_PATTERNS = [
+    r"diff 为空",
+    r"\(no diff yet\)",
+    r"\bno diff\b",
+    r"diff is empty",
+    r"无法对.{0,20}改动",
+    r"无法.{0,10}review",
+    r"请提供.{0,20}diff",
+    r"give me .{0,20}changes",
+]
+
 
 @dataclass
 class ReviewResult:
@@ -107,5 +124,12 @@ def review_diff(
         )
 
     summary = stdout.strip()
+    inconclusive = any(
+        re.search(pat, summary, re.IGNORECASE) for pat in _INCONCLUSIVE_PATTERNS
+    )
+    if inconclusive:
+        # Codex is complaining about missing input, not condemning the code.
+        # Fall back to "review skipped" so the task isn't killed unfairly.
+        return ReviewResult(approved=False, skipped=True, summary=summary)
     rejected = any(re.search(pat, summary, re.IGNORECASE) for pat in _REJECT_PATTERNS)
     return ReviewResult(approved=not rejected, skipped=False, summary=summary)
