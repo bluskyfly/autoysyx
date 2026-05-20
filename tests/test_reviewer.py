@@ -2,7 +2,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from orchestrator.reviewer import ReviewResult, review_diff, _DIFF_FILE_RELPATH
+from orchestrator.reviewer import ReviewResult, review_diff
 
 
 def test_review_diff_passes_when_codex_approves(tmp_path: Path):
@@ -30,50 +30,56 @@ def test_review_diff_treats_codex_failure_as_skipped(tmp_path: Path):
     assert "codex: command not found" in result.summary
 
 
-def test_review_diff_writes_large_diff_to_file_not_argv(tmp_path: Path):
-    """Bug C fix: a 5 MB diff must not be embedded in the question argv.
+def test_review_diff_inlines_small_diff_into_question(tmp_path: Path):
+    """A small diff goes verbatim into the codex question (stdin), not a file.
 
-    ask-codex.sh receives the question as a positional argument and joins it
-    into a single string. Passing a large diff inline blows up execve() with
-    `OSError: [Errno 7] Argument list too long`. The fix is to spill the diff
-    to a file inside `project_root` and only pass a short question that points
-    codex at that file.
+    Bug D fix: codex runs under a bwrap sandbox that can refuse disk reads.
+    The reviewer must hand codex everything it needs in the prompt itself.
     """
-    huge_diff = "diff --git a/x b/x\n+" + ("A" * 5_000_000) + "\n"
-    captured_questions: list[str] = []
+    small_diff = "diff --git a/x b/x\n+SENTINEL_INLINE_VALUE\n"
+    captured: list[str] = []
 
     def capture(question: str, *_a, **_kw):
-        captured_questions.append(question)
+        captured.append(question)
         return (0, "Looks good. No issues.", "")
 
     with patch("orchestrator.reviewer._run_codex", side_effect=capture):
-        result = review_diff(
-            diff_text=huge_diff, task_id="T", project_root=tmp_path
-        )
+        review_diff(diff_text=small_diff, task_id="S", project_root=tmp_path)
+
+    assert len(captured) == 1
+    q = captured[0]
+    assert "SENTINEL_INLINE_VALUE" in q
+    assert "diff truncated" not in q
+
+
+def test_review_diff_truncates_huge_diff_but_still_inlines(tmp_path: Path):
+    """A 5 MB diff must be truncated AND inlined (not spilled to a file).
+
+    Truncating keeps us well under ARG_MAX / the codex context window. Inlining
+    keeps us independent of codex sandbox file-read permission.
+    """
+    huge_diff = (
+        "diff --git a/head b/head\n+HEAD_SENTINEL\n"
+        + ("A" * 5_000_000)
+        + "\n+TAIL_SENTINEL\ndiff end\n"
+    )
+    captured: list[str] = []
+
+    def capture(question: str, *_a, **_kw):
+        captured.append(question)
+        return (0, "Looks good. No issues.", "")
+
+    with patch("orchestrator.reviewer._run_codex", side_effect=capture):
+        result = review_diff(diff_text=huge_diff, task_id="T", project_root=tmp_path)
 
     assert result.approved
-    assert len(captured_questions) == 1
-    q = captured_questions[0]
-    assert len(q.encode()) < 8192, (
-        f"question must stay small ({len(q.encode())} bytes) — large diff "
-        "must be spilled to a file, not embedded inline"
-    )
-    diff_path = tmp_path / _DIFF_FILE_RELPATH.format(task_id="T")
-    assert diff_path.exists()
-    # The spilled patch is truncated (codex can't usefully read 5MB of HTML).
-    spilled = diff_path.read_text()
-    assert "diff truncated" in spilled
-    # Both ends of the original diff should still be visible.
-    assert spilled.startswith("[diff truncated")
-    assert str(_DIFF_FILE_RELPATH.format(task_id="T")) in q
-
-
-def test_review_diff_preserves_small_diff_verbatim(tmp_path: Path):
-    """Diffs below the truncation threshold are written through unchanged."""
-    small_diff = "diff --git a/x b/x\n+hello\n"
-    with patch("orchestrator.reviewer._run_codex") as r:
-        r.return_value = (0, "Looks good. No issues.", "")
-        review_diff(diff_text=small_diff, task_id="S", project_root=tmp_path)
-    spilled = (tmp_path / _DIFF_FILE_RELPATH.format(task_id="S")).read_text()
-    assert spilled == small_diff
-    assert "diff truncated" not in spilled
+    assert len(captured) == 1
+    q = captured[0]
+    # Must stay safely under ARG_MAX (~3.2 MB) and codex context budget.
+    assert len(q.encode()) < 400_000, f"question too large: {len(q.encode())} bytes"
+    assert "diff truncated" in q
+    # Both ends of the original diff still visible in the truncated payload.
+    assert "HEAD_SENTINEL" in q
+    assert "TAIL_SENTINEL" in q
+    # No reliance on a spilled patch file.
+    assert not (tmp_path / ".autoysyx").exists()

@@ -162,11 +162,9 @@ def test_codex_sees_staged_diff_not_empty(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert len(captured_questions) == 1
-    # Bug C fix: diff is spilled to a file (avoids ARG_MAX). Question references
-    # the file by path; the file must hold the real diff with sentinel content.
-    diff_file = tmp_path / ".autoysyx" / "codex-diff-T.patch"
-    assert diff_file.exists(), "reviewer must spill diff to .autoysyx/"
-    diff_text = diff_file.read_text()
-    assert "new_artifact.txt" in diff_text
-    assert "sentinel-codex-diff" in diff_text
-    assert ".autoysyx/codex-diff-T.patch" in captured_questions[0]
+    # Bug A regression: real diff with the worker's sentinel must reach codex.
+    # Bug D fix: diff is inlined in the prompt itself (codex sandbox can't read disk).
+    q = captured_questions[0]
+    assert "new_artifact.txt" in q
+    assert "sentinel-codex-diff" in q
+    assert not (tmp_path / ".autoysyx").exists(), "reviewer must not spill diff to disk"
