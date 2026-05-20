@@ -217,3 +217,7 @@ def bootstrap(ctx: click.Context) -> None:
     versions = capture_tool_versions()
     write_env_lock(root / "tools" / "env-lock.yaml", versions)
     click.echo("  bootstrap complete; env-lock.yaml written")
+
+
+if __name__ == "__main__":
+    cli()

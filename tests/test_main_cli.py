@@ -1,6 +1,7 @@
 """Tests for orchestrator.main CLI."""
 import json
 import subprocess
+import sys
 from unittest.mock import patch
 
 from click.testing import CliRunner
@@ -15,6 +16,17 @@ def test_cli_help_lists_commands():
     assert result.exit_code == 0
     for cmd in ("run", "status", "resume", "skip", "retry", "bootstrap"):
         assert cmd in result.output
+
+
+def test_module_entrypoint_invokes_cli():
+    """`python -m orchestrator.main --help` must print help (Makefile depends on this)."""
+    result = subprocess.run(
+        [sys.executable, "-m", "orchestrator.main", "--help"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, f"stderr={result.stderr}"
+    assert "status" in result.stdout
+    assert "run" in result.stdout
 
 
 def test_status_command_works_on_fresh_db(tmp_path, monkeypatch):
