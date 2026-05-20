@@ -7,7 +7,7 @@ source "$(dirname "$0")/_common.sh"
 require_artifact "$WORKBENCH/logisim/sCPU.circ"
 
 if ! command -v logisim-cli >/dev/null; then
-    # Fallback: 检查电路文件有 "main" 标签即认为基本完成
+    # Fallback: 没有 logisim-cli 时只校验电路文件里含 "sCPU" 标识
     expect_grep "sCPU" "$WORKBENCH/logisim/sCPU.circ"
     echo "sCPU PASS (file-only check, logisim-cli not available)"
     exit 0
