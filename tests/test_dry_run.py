@@ -126,6 +126,60 @@ def test_dry_run_marks_failure_and_continues_to_exit_clean(tmp_path, monkeypatch
     assert len(bundles) == 1, f"expected one bundle dir, got {bundles}"
 
 
+def test_worker_timeout_is_recorded_as_attempt_failed_not_crash(tmp_path, monkeypatch):
+    """Bug F: WorkerTimeout must not propagate out of run() and kill orchestrator.
+
+    Previously, a 1-hour claude CLI timeout on D3a raised WorkerTimeout, which
+    bubbled past `run()` and crashed the whole orchestrator — leaving the task
+    in `attempt_started` with no `attempt_failed`/`task_needs_debug` follow-up.
+    The fix wraps run_worker in try/except so the orchestrator records an
+    `attempt_failed` event (fail_category='worker_crash') and proceeds to the
+    next attempt / escalation path like any other failure.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "tasks.yaml").write_text("""tasks:
+  - id: T
+    title: slow task
+    stage: x
+    deps: []
+    max_attempts: 2
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "true", expect_exit: 0 }
+""")
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "_template.md").write_text("{{ task_id }}{{ escalation_hint }}")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+
+    from orchestrator.worker import WorkerTimeout
+
+    def boom(*_a, **_kw):
+        raise WorkerTimeout("claude CLI timed out after 3600s")
+
+    with patch("orchestrator.worker._spawn_claude", side_effect=boom), \
+         patch("orchestrator.reviewer._run_codex"):
+        result = CliRunner().invoke(cli, ["run", "--max-tasks", "1"])
+
+    # The orchestrator must NOT crash — it should exit cleanly after escalating.
+    assert result.exit_code == 0, result.output
+    from orchestrator.db import Database
+    db = Database(tmp_path / "orchestrator" / "state.db")
+    # Two attempts both timed out; task should be parked in needs_debug.
+    assert db.task_status("T") == "needs_debug"
+    # Both attempts recorded as worker_crash, not silently dropped.
+    import json, sqlite3
+    rows = sqlite3.connect(str(tmp_path / "orchestrator" / "state.db")).execute(
+        "SELECT payload FROM events WHERE type='attempt_failed' AND task_id='T'"
+    ).fetchall()
+    assert len(rows) == 2
+    for (payload_json,) in rows:
+        payload = json.loads(payload_json)
+        assert payload["fail_category"] == "worker_crash"
+
+
 def test_codex_sees_staged_diff_not_empty(tmp_path, monkeypatch):
     """Bug A fix: `git add -A` must run BEFORE the codex review, so codex sees real changes.
 

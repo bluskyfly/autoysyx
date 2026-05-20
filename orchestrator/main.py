@@ -148,11 +148,23 @@ def run(ctx: click.Context, max_tasks: int) -> None:
                 [root / f for f in nxt.immutable_files]
             )
 
-            worker_res = run_worker(
-                prompt=prompt,
-                work_dir=root,
-                add_dirs=[root / "docs-md", root / "ysyx-workbench"],
-            )
+            try:
+                worker_res = run_worker(
+                    prompt=prompt,
+                    work_dir=root,
+                    add_dirs=[root / "docs-md", root / "ysyx-workbench"],
+                )
+            except Exception as e:
+                # Bug F: WorkerTimeout (or any worker-spawn crash) was
+                # propagating out of run() and killing the whole orchestrator.
+                # Treat it as an ordinary attempt failure so escalation kicks
+                # in after max_attempts instead of taking the process down.
+                prior_errors.append(f"worker crashed: {type(e).__name__}: {e}")
+                db.append_event(type="attempt_failed", task_id=nxt.id,
+                                payload={"attempt_num": attempt_num,
+                                         "fail_category": "worker_crash",
+                                         "log_excerpt": prior_errors[-1][:500]})
+                continue
             if worker_res.contract is None:
                 prior_errors.append(
                     f"worker contract error: {worker_res.contract_error or worker_res.api_error}"
