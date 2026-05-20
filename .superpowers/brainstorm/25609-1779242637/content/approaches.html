@@ -1,0 +1,127 @@
+<h2>autoysyx 三种自动执行架构对比</h2>
+<p class="subtitle">基于你的约束（一镚到底、文档为准、官方模板 + 开源参考、产出 = 仓库 + 报告 + 可重跑脚本）</p>
+
+<div class="cards">
+
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+<pre style="margin:0;font-size:12px;line-height:1.4;">
+┌─ A: 单进程 RLCR Loop (推荐) ─────────┐
+│                                       │
+│  plan.md (按阶段拆 5 个)              │
+│      ↓                                │
+│  ┌──────────────────────────┐         │
+│  │  Ralph Loop              │         │
+│  │  (humanize:start-rlcr)   │         │
+│  │                          │         │
+│  │  while 未完成:            │         │
+│  │    Claude 工作 1 个 task │         │
+│  │    Codex review          │         │
+│  │    git commit / fix      │         │
+│  │    state.json 更新       │         │
+│  └──────────────────────────┘         │
+│      ↓                                │
+│  ysyx-workbench/ (产物仓库)           │
+│  reports/<stage>-<task>.md            │
+│                                       │
+│  ★ 复用现成 skill, 5 个 plan 文件      │
+│  ★ Codex 当独立 reviewer 防止跑偏     │
+│  ★ 失败 N 次自动 escalate             │
+└───────────────────────────────────────┘
+</pre>
+    </div>
+    <div class="card-body">
+      <h3>A: 单进程 RLCR Loop</h3>
+      <p><b>形态</b>：复用 superpowers / humanize 的 Ralph-Loop + Codex Review 机制，5 个阶段 plan 文件递归执行</p>
+      <p><b>优</b>：复用成熟 skill；Codex 独立审查代码质量；自动 commit + 报告</p>
+      <p><b>劣</b>：依赖外部 codex CLI；单进程崩溃要手动重启</p>
+      <p><b>工作量</b>：写 5 个 stage plan + 1 个调度脚本 ≈ 1-2 天</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+<pre style="margin:0;font-size:12px;line-height:1.4;">
+┌─ B: Python 状态机 Orchestrator ──────┐
+│                                       │
+│  tasks.yaml (~27 个 task)             │
+│      ↓                                │
+│  ┌──────────────────────────┐         │
+│  │  autoysyx.py              │        │
+│  │                           │        │
+│  │  for task in tasks:       │        │
+│  │    if state.done(task):   │        │
+│  │      continue             │        │
+│  │    spawn `claude -p ...`  │        │
+│  │      → 输出代码           │        │
+│  │    run tests → check      │        │
+│  │    if fail: retry N x     │        │
+│  │    if pass: commit + log  │        │
+│  └──────────────────────────┘         │
+│      ↓                                │
+│  state.json + ysyx-workbench/         │
+│  + reports/ + tests-logs/             │
+│                                       │
+│  ★ 完全可控, 可中断/恢复              │
+│  ★ 每个 task 独立 context             │
+│  ★ 状态 = 单一可信来源                 │
+└───────────────────────────────────────┘
+</pre>
+    </div>
+    <div class="card-body">
+      <h3>B: Python 状态机驱动</h3>
+      <p><b>形态</b>：写一个 Python orchestrator，维护 tasks.yaml + state.json，逐个 spawn `claude -p` 完成任务</p>
+      <p><b>优</b>：完全可控；可中断/恢复；每个 task 独立 context 不会被污染</p>
+      <p><b>劣</b>：要从头写 orchestrator（约 500-800 行 Python）；no codex review（除非额外加）</p>
+      <p><b>工作量</b>：写 orchestrator + 27 个 task prompt 模板 ≈ 2-3 天</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+<pre style="margin:0;font-size:12px;line-height:1.4;">
+┌─ C: 当前会话 + /loop 自驱 ──────────┐
+│                                       │
+│  本会话写 plan, 然后:                  │
+│                                       │
+│  /loop /next-task                     │
+│      ↓                                │
+│  ┌──────────────────────────┐         │
+│  │  Claude Code 主会话      │         │
+│  │  (Opus 4.7, 1M context)  │         │
+│  │                          │         │
+│  │  每 N 分钟自动 fire:      │         │
+│  │    读 state.json          │        │
+│  │    找下一个 task          │        │
+│  │    干活 + 测试 + 提交     │        │
+│  │    更新 state             │        │
+│  └──────────────────────────┘         │
+│      ↓                                │
+│  ysyx-workbench/ + reports/           │
+│                                       │
+│  ★ 零基础设施, 直接复用本会话         │
+│  ★ Opus 4.7 1M context 容得下         │
+│  ★ 出问题第一时间能看到                │
+└───────────────────────────────────────┘
+</pre>
+    </div>
+    <div class="card-body">
+      <h3>C: /loop 自驱 + 1M context</h3>
+      <p><b>形态</b>：本会话定 plan 后，挂 `/loop 30m /next-task` 让当前 Claude Code 会话自己循环干</p>
+      <p><b>优</b>：零基础设施；当前 Opus 4.7 + 1M context 足够装下 ~270 小时的滚动状态；遇错你能立即看到</p>
+      <p><b>劣</b>：会话本身可能崩溃/被关闭；不便横向扩展；context 仍会被 ~100 万 token 任务占满</p>
+      <p><b>工作量</b>：写 1 个 `/next-task` 命令 + plan 文件 ≈ 半天到 1 天</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="section" style="margin-top:24px;">
+  <h3>我的推荐顺序</h3>
+  <p><b>A &gt; B &gt; C</b>。理由：</p>
+  <ul>
+    <li><b>A 最贴合"自动执行 + 文档为准 + 遇错才停"</b>。Ralph Loop 本来就是为长跑设计的，Codex review 提供独立 reviewer 防止 Claude 自己骗自己测试通过。</li>
+    <li>B 控制力更强但工作量大，写完前进度=0，不符合"快速开始"。</li>
+    <li>C 最快开工但风险在"会话寿命"——270 小时跨度内本会话肯定会被你或系统关掉。</li>
+  </ul>
+</div>
