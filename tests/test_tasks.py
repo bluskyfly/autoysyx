@@ -3,7 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.tasks import Task, load_tasks, TasksFileError
+from orchestrator.tasks import (
+    Task,
+    TasksFileError,
+    detect_cycle,
+    load_tasks,
+    topological_order,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -74,3 +80,37 @@ def test_load_tasks_string_deps_raises(tmp_path: Path):
     )
     with pytest.raises(TasksFileError, match="deps"):
         load_tasks(bad)
+
+
+def test_topological_order_respects_deps():
+    tasks = load_tasks(FIXTURE_DIR / "minimal_tasks.yaml")
+    order = topological_order(tasks)
+    ids = [t.id for t in order]
+    # PHASE0 must come before F1, F1 before F2
+    assert ids.index("PHASE0") < ids.index("F1")
+    assert ids.index("F1") < ids.index("F2")
+
+
+def test_detect_cycle_returns_none_when_acyclic():
+    tasks = load_tasks(FIXTURE_DIR / "minimal_tasks.yaml")
+    assert detect_cycle(tasks) is None
+
+
+def test_detect_cycle_finds_simple_cycle():
+    a = Task(id="A", title="a", stage="X", deps=["B"])
+    b = Task(id="B", title="b", stage="X", deps=["A"])
+    cycle = detect_cycle([a, b])
+    assert cycle is not None
+    assert set(cycle) == {"A", "B"}
+
+
+def test_detect_cycle_finds_self_loop():
+    a = Task(id="A", title="a", stage="X", deps=["A"])
+    cycle = detect_cycle([a])
+    assert cycle == ["A"]
+
+
+def test_topological_order_raises_on_unknown_dep():
+    a = Task(id="A", title="a", stage="X", deps=["NOPE"])
+    with pytest.raises(TasksFileError, match="unknown dep"):
+        topological_order([a])

@@ -96,3 +96,71 @@ def load_tasks(path: Path) -> list[Task]:
             )
         )
     return tasks
+
+
+def topological_order(tasks: list[Task]) -> list[Task]:
+    """Return tasks in dependency-respecting order. Raises if cycle or unknown dep."""
+    by_id = {t.id: t for t in tasks}
+    for t in tasks:
+        for dep in t.deps:
+            if dep not in by_id:
+                raise TasksFileError(f"task {t.id} references unknown dep {dep}")
+    cycle = detect_cycle(tasks)
+    if cycle:
+        raise TasksFileError(f"cycle detected: {' -> '.join(cycle)}")
+
+    visited: set[str] = set()
+    ordered: list[Task] = []
+
+    def visit(tid: str) -> None:
+        if tid in visited:
+            return
+        visited.add(tid)
+        for dep in by_id[tid].deps:
+            visit(dep)
+        ordered.append(by_id[tid])
+
+    for t in tasks:
+        visit(t.id)
+    return ordered
+
+
+def detect_cycle(tasks: list[Task]) -> list[str] | None:
+    """Return a cycle (as list of task ids) if any, else None."""
+    by_id = {t.id: t for t in tasks}
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = {t.id: WHITE for t in tasks}
+    parent: dict[str, str | None] = {t.id: None for t in tasks}
+
+    def dfs(u: str) -> list[str] | None:
+        color[u] = GRAY
+        for v in by_id[u].deps:
+            if v not in by_id:
+                continue  # unknown deps handled by topological_order
+            if color[v] == GRAY:
+                # Found cycle. Walk parents from u back to v.
+                if u == v:
+                    # Self-loop: cycle is just [u].
+                    return [u]
+                cycle = [u]
+                x = parent[u]
+                while x is not None and x != v:
+                    cycle.append(x)
+                    x = parent[x]
+                cycle.append(v)
+                cycle.reverse()
+                return cycle
+            if color[v] == WHITE:
+                parent[v] = u
+                found = dfs(v)
+                if found:
+                    return found
+        color[u] = BLACK
+        return None
+
+    for t in tasks:
+        if color[t.id] == WHITE:
+            found = dfs(t.id)
+            if found:
+                return found
+    return None
