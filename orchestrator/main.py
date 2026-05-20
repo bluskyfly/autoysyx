@@ -96,9 +96,7 @@ def run(ctx: click.Context, max_tasks: int) -> None:
     import subprocess
 
     root: Path = ctx.obj["root"]
-    db = Database(_default_db_path(root))
-    _default_db_path(root).parent.mkdir(parents=True, exist_ok=True)
-    db.init_schema()
+    db = _open_db(root)
     tasks = load_tasks(_default_tasks_path(root))
     template_path = root / "prompts" / "_template.md"
     reports_dir = root / "reports"
