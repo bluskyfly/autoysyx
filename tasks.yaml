@@ -342,3 +342,219 @@ tasks:
       steps:
         - { cmd: "cd ysyx-workbench && bash scripts/run_d6_mario.sh",
             expect_exit: 0, expect_grep: ["Mario"], timeout_sec: 1800 }
+
+  # ===== Stage C: 单周期 NPC =====
+  - id: C1
+    title: C 阶段工具和基础设施
+    stage: C
+    deps: [D6c]
+    estimated_minutes: 90
+    doc_refs: ["docs-md/2407/c/1.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "test -f ysyx-workbench/npc/Makefile.git", expect_exit: 0 }
+        - { cmd: "cd ysyx-workbench/npc && make ftrace-test",
+            expect_exit: 0, expect_grep: ["ftrace OK"], timeout_sec: 600 }
+
+  - id: C2a
+    title: C 阶段单周期 NPC — RV32E 译码 + 数据通路
+    stage: C
+    deps: [C1]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/2407/c/2.md"]
+    immutable_files: [ysyx-workbench/npc/tests/]
+    verification:
+      type: multi_step
+      pre_steps:
+        - { cmd: "cd ysyx-workbench/npc && make clean", expect_exit: 0 }
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make sim ISA=rv32e", expect_exit: 0, timeout_sec: 1200 }
+
+  - id: C2b
+    title: C 阶段单周期 NPC — 跑通 difftest (rv32e)
+    stage: C
+    deps: [C2a]
+    estimated_minutes: 180
+    doc_refs: ["docs-md/2407/c/2.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "YSYX_WORKBENCH=$(pwd)/ysyx-workbench ISA=rv32e bash test_runner/difftest/run-difftest.sh",
+            expect_exit: 0, expect_grep: ["DIFFTEST: passed"], timeout_sec: 1800 }
+
+  - id: C3
+    title: C 阶段调试技巧 (gtkwave / 波形)
+    stage: C
+    deps: [C2b]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/c/3.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make sim-trace",
+            expect_exit: 0, expect_grep: ["wave.vcd"], timeout_sec: 600 }
+        - { cmd: "test -f ysyx-workbench/npc/build/wave.vcd", expect_exit: 0 }
+
+  - id: C4
+    title: ELF 文件和链接
+    stage: C
+    deps: [C3]
+    estimated_minutes: 60
+    doc_refs: ["docs-md/2407/c/4.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make load-test",
+            expect_exit: 0, expect_grep: ["LOAD OK"], timeout_sec: 600 }
+
+  - id: C5a
+    title: NPC 中实现异常处理 + CSR
+    stage: C
+    deps: [C4]
+    estimated_minutes: 180
+    doc_refs: ["docs-md/2407/c/5.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make csr-tests",
+            expect_exit: 0, expect_grep: ["CSR PASS"], timeout_sec: 1200 }
+
+  - id: C5b
+    title: NPC 引导 RT-Thread
+    stage: C
+    deps: [C5a]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/2407/c/5.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make run-rt-thread",
+            expect_exit: 0, expect_grep: ["RT-Thread"], timeout_sec: 1800 }
+
+  # ===== Stage B: SoC + 流水线 =====
+  - id: B1
+    title: 总线 (SimpleBus -> AXI 转接桥)
+    stage: B
+    deps: [C5b]
+    estimated_minutes: 240
+    doc_refs: ["docs-md/2407/b/1.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make bus-tests",
+            expect_exit: 0, expect_grep: ["BUS PASS"], timeout_sec: 1200 }
+
+  - id: B2a
+    title: SoC 计算机系统 — 总线交叉
+    stage: B
+    deps: [B1]
+    estimated_minutes: 240
+    doc_refs: ["docs-md/2407/b/2.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make xbar-tests",
+            expect_exit: 0, expect_grep: ["XBAR PASS"], timeout_sec: 1200 }
+
+  - id: B2b
+    title: SoC 计算机系统 — 外设挂载 (UART/SPI/SDRAM)
+    stage: B
+    deps: [B2a]
+    estimated_minutes: 240
+    doc_refs: ["docs-md/2407/b/2.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make peripheral-tests",
+            expect_exit: 0, expect_grep: ["PERIPH PASS"], timeout_sec: 1800 }
+
+  - id: B2c
+    title: SoC 集成测试 (跑 typing-game + microbench)
+    stage: B
+    deps: [B2b]
+    estimated_minutes: 180
+    doc_refs: ["docs-md/2407/b/2.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench && bash scripts/run_b_soc_integration.sh",
+            expect_exit: 0, expect_grep: ["INTEGRATION PASS"], timeout_sec: 3600 }
+
+  - id: B3
+    title: 时序分析和优化 (STA, 无 negative slack)
+    stage: B
+    deps: [B2c]
+    estimated_minutes: 90
+    doc_refs: ["docs-md/2407/b/3.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make sta",
+            expect_exit: 0, expect_grep: ["TIMING OK"], timeout_sec: 1800 }
+        - { cmd: "! grep -E 'VIOLATED|negative slack' ysyx-workbench/npc/build/sta_report.txt",
+            expect_exit: 0 }
+
+  - id: B4a
+    title: 简易 Cache — 框架与基本读写
+    stage: B
+    deps: [B3]
+    estimated_minutes: 180
+    doc_refs: ["docs-md/2407/b/4.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make cache-basic-tests",
+            expect_exit: 0, expect_grep: ["CACHE BASIC PASS"], timeout_sec: 1200 }
+
+  - id: B4b
+    title: 简易 Cache — 替换策略 (LRU/伪 LRU)
+    stage: B
+    deps: [B4a]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/2407/b/4.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make cache-replacement-tests",
+            expect_exit: 0, expect_grep: ["LRU PASS"], timeout_sec: 1200 }
+
+  - id: B4c
+    title: 简易 Cache — 命中率达标 (microbench >= 90%)
+    stage: B
+    deps: [B4b]
+    estimated_minutes: 120
+    doc_refs: ["docs-md/2407/b/4.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make cache-microbench 2>&1 | tee /tmp/cache.log",
+            expect_exit: 0, timeout_sec: 1800 }
+        - { cmd: "grep -E 'Hit rate: 9[0-9]\\.[0-9]+%' /tmp/cache.log", expect_exit: 0 }
+
+  - id: B5a
+    title: 流水线处理器 — 5 段切分
+    stage: B
+    deps: [B4c]
+    estimated_minutes: 240
+    doc_refs: ["docs-md/2407/b/5.md"]
+    immutable_files: [ysyx-workbench/npc/tests/]
+    verification:
+      type: multi_step
+      pre_steps:
+        - { cmd: "cd ysyx-workbench/npc && make clean", expect_exit: 0 }
+      steps:
+        - { cmd: "cd ysyx-workbench/npc && make sim PIPELINE=1",
+            expect_exit: 0, timeout_sec: 1800 }
+
+  - id: B5b
+    title: 流水线处理器 — 冒险解决 + difftest 全过
+    stage: B
+    deps: [B5a]
+    estimated_minutes: 240
+    doc_refs: ["docs-md/2407/b/5.md"]
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "YSYX_WORKBENCH=$(pwd)/ysyx-workbench PIPELINE=1 bash test_runner/difftest/run-difftest.sh",
+            expect_exit: 0, expect_grep: ["DIFFTEST: passed"], timeout_sec: 3600 }
