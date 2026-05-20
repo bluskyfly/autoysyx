@@ -84,18 +84,123 @@ def resume(ctx: click.Context) -> None:
 
 
 @cli.command()
+@click.option("--max-tasks", type=int, default=0,
+              help="Limit to N tasks then stop (0 = unlimited).")
 @click.pass_context
-def run(ctx: click.Context) -> None:
+def run(ctx: click.Context, max_tasks: int) -> None:
     """Run tasks one at a time until done, failed, or interrupted."""
+    from .worker import run_worker, assemble_prompt
+    from .verifier import verify_task, snapshot_immutable_files
+    from .reviewer import review_diff
+    from .reporter import generate_task_report
+    import subprocess
+
     root: Path = ctx.obj["root"]
-    db = _open_db(root)
+    db = Database(_default_db_path(root))
+    _default_db_path(root).parent.mkdir(parents=True, exist_ok=True)
+    db.init_schema()
     tasks = load_tasks(_default_tasks_path(root))
-    nxt = pick_next_task(db, tasks)
-    if nxt is None:
-        click.echo("  nothing to do — all tasks done or blocked")
-        return
-    click.echo(f"  next task: {nxt.id} — {nxt.title}")
-    # Real run loop wired in Task 11.2.
+    template_path = root / "prompts" / "_template.md"
+    reports_dir = root / "reports"
+
+    done_count = 0
+    while True:
+        nxt = pick_next_task(db, tasks)
+        if nxt is None:
+            click.echo("  all done or blocked")
+            return
+        if max_tasks and done_count >= max_tasks:
+            click.echo(f"  reached --max-tasks {max_tasks}")
+            return
+
+        click.echo(f"  ▶ {nxt.id} — {nxt.title}")
+        db.append_event(type="task_started", task_id=nxt.id)
+        attempt_num = 0
+        prior_errors: list[str] = []
+
+        while attempt_num < nxt.max_attempts:
+            attempt_num += 1
+            db.append_event(type="attempt_started", task_id=nxt.id,
+                            payload={"attempt_num": attempt_num})
+
+            prompt = assemble_prompt(template_path, nxt, root, prior_errors)
+            immutable_base = snapshot_immutable_files(
+                [root / f for f in nxt.immutable_files]
+            )
+
+            worker_res = run_worker(
+                prompt=prompt,
+                work_dir=root,
+                add_dirs=[root / "docs-md", root / "ysyx-workbench"],
+            )
+            if worker_res.contract is None:
+                prior_errors.append(
+                    f"worker contract error: {worker_res.contract_error or worker_res.api_error}"
+                )
+                db.append_event(type="attempt_failed", task_id=nxt.id,
+                                payload={"attempt_num": attempt_num,
+                                         "fail_category": "contract_invalid",
+                                         "log_excerpt": prior_errors[-1][:500]})
+                continue
+
+            verify_res = verify_task(nxt, cwd=root, immutable_baseline=immutable_base)
+            if not verify_res.passed:
+                excerpt = ""
+                if verify_res.log_path:
+                    excerpt = Path(verify_res.log_path).read_text()[-1000:]
+                prior_errors.append(
+                    f"verify failed ({verify_res.fail_category}):\n{excerpt}"
+                )
+                db.append_event(type="attempt_failed", task_id=nxt.id,
+                                payload={"attempt_num": attempt_num,
+                                         "fail_category": verify_res.fail_category,
+                                         "log_excerpt": excerpt[:500]})
+                continue
+
+            # Verifier passed; get git diff and ask codex
+            diff = subprocess.run(
+                ["git", "diff", "--cached", "HEAD"],
+                cwd=str(root), capture_output=True, text=True
+            ).stdout or "(no diff yet)"
+            review = review_diff(diff, nxt.id, project_root=root)
+            if not review.approved and not review.skipped:
+                prior_errors.append(f"codex rejected: {review.summary[:500]}")
+                db.append_event(type="attempt_failed", task_id=nxt.id,
+                                payload={"attempt_num": attempt_num,
+                                         "fail_category": "codex_reject",
+                                         "log_excerpt": review.summary[:500]})
+                continue
+
+            db.append_event(type="attempt_passed", task_id=nxt.id,
+                            payload={"attempt_num": attempt_num,
+                                     "duration_sec": verify_res.duration_sec})
+            if not review.skipped:
+                db.append_event(type="codex_passed", task_id=nxt.id,
+                                payload={"summary": review.summary[:2000]})
+
+            subprocess.run(["git", "add", "-A"], cwd=str(root), check=True)
+            commit_msg = f"{nxt.id}: {nxt.title}"
+            subprocess.run(
+                ["git", "commit", "-m", commit_msg, "--allow-empty"],
+                cwd=str(root), capture_output=True, text=True, check=True,
+            )
+            sha = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(root), capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            db.append_event(type="task_done", task_id=nxt.id,
+                            payload={"commit": sha})
+            generate_task_report(db, nxt, reports_dir)
+            click.echo(f"  ✓ {nxt.id} done ({sha})")
+            done_count += 1
+            break
+        else:
+            # exhausted attempts
+            db.append_event(type="task_failed", task_id=nxt.id,
+                            payload={"attempts": attempt_num})
+            generate_task_report(db, nxt, reports_dir)
+            click.echo(f"  ✗ {nxt.id} FAILED after {attempt_num} attempts", err=True)
+            sys.exit(1)
 
 
 @cli.command()
