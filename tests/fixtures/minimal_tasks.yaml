@@ -1,0 +1,27 @@
+tasks:
+  - id: PHASE0
+    title: Bootstrap toolchain
+    stage: phase0
+    deps: []
+    estimated_minutes: 30
+    verification:
+      type: env_lock_complete
+  - id: F1
+    title: 如何科学地提问
+    stage: F
+    deps: [PHASE0]
+    estimated_minutes: 20
+    doc_refs: ["docs-md/2407/f/1.md"]
+    verification:
+      type: doc_artifact
+      steps:
+        - { cmd: "test -f reports/F1.md", expect_exit: 0 }
+  - id: F2
+    title: Logisim 安装
+    stage: F
+    deps: [F1]
+    estimated_minutes: 30
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "which logisim", expect_exit: 0 }
