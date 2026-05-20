@@ -21,3 +21,4 @@ docs-mirror/
 out/
 tools/bootstrap.log
 escalations/
+prompts/_hints/
