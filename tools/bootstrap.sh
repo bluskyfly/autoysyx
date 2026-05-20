@@ -17,13 +17,16 @@ ensure_apt() {
     sudo apt-get install -y -qq "$@" 2>&1 | tee -a "$LOG"
 }
 
-# 1. 基本依赖
+# 1. 基本依赖 (含 verilator/yosys, 仿真/综合必备)
 ensure_apt build-essential git curl ca-certificates \
-           bsdmainutils device-tree-compiler libreadline-dev libsdl2-dev
+           bsdmainutils device-tree-compiler libreadline-dev libsdl2-dev \
+           verilator yosys
 
 # 2. RISC-V cross compilers
-ensure_apt gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
-           gcc-riscv64-unknown-elf || log "gcc-riscv64-unknown-elf not in repos, will use riscv32 only"
+# 必需: linux-gnu (用户态 ELF) 在 Ubuntu 主仓库一定有, 失败立即终止
+ensure_apt gcc-riscv64-linux-gnu g++-riscv64-linux-gnu
+# 可选: unknown-elf (bare metal); 部分 Ubuntu 版本不带, 失败仅记录
+ensure_apt gcc-riscv64-unknown-elf || log "gcc-riscv64-unknown-elf not in repos, will use riscv32 only"
 
 # 3. QEMU (用于 cross-check 某些 PA)
 ensure_apt qemu-system-misc qemu-user
@@ -53,7 +56,8 @@ fi
 log "smoke: verilator + yosys"
 verilator --version | tee -a "$LOG"
 yosys --version | tee -a "$LOG"
-log "smoke: riscv32-unknown-elf-gcc"
-riscv32-unknown-elf-gcc --version | head -1 | tee -a "$LOG"
+# riscv32-unknown-elf 不在 Ubuntu 仓库, 需操作员手动准备 (xPack 或源码构建)
+# orchestrator 后续会通过 env-lock 检测是否就绪, 这里不强制 smoke
+log "note: riscv32-unknown-elf toolchain must be installed manually (xPack or build from source) — orchestrator will detect via env-lock"
 
 log "bootstrap done."

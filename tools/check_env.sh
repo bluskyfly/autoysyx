@@ -9,20 +9,42 @@ if [[ ! -f "$LOCK" ]]; then
     exit 2
 fi
 
-fail=0
-while IFS=': ' read -r key value; do
-    [[ "$key" =~ ^- ]] || continue
-    tool=$(echo "$value" | awk -F: '{print $1}')
-    locked=$(grep -A1 "name: $tool" "$LOCK" | awk '/version:/ {print $2}')
-    [[ -z "$locked" ]] && continue
-    current=$(${tool} --version 2>&1 | head -1)
-    if ! echo "$current" | grep -qF "$locked"; then
-        echo "ENV DRIFT: $tool expected $locked, got: $current" >&2
-        fail=1
-    fi
-done < "$LOCK"
+# Delegate to Python (pyyaml is a project dep)
+python3 - "$LOCK" <<'PY'
+import subprocess
+import sys
 
-if [[ $fail -ne 0 ]]; then
-    exit 1
-fi
-echo "env check OK"
+import yaml
+
+lock_path = sys.argv[1]
+with open(lock_path) as f:
+    parsed = yaml.safe_load(f)
+
+fail = 0
+for entry in parsed.get("tools", []):
+    if not entry.get("available"):
+        continue
+    name = entry["name"]
+    locked = entry.get("version", "")
+    try:
+        result = subprocess.run(
+            [name, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print(f"ENV DRIFT: {name} not callable", file=sys.stderr)
+        fail = 1
+        continue
+    current = result.stdout.splitlines()[0].strip() if result.stdout else ""
+    if current != locked:
+        print(f"ENV DRIFT: {name} expected {locked!r}, got: {current!r}", file=sys.stderr)
+        fail = 1
+
+if fail:
+    sys.exit(1)
+print("env check OK")
+PY
