@@ -36,3 +36,41 @@ def test_load_tasks_invalid_yaml_raises(tmp_path: Path):
     bad.write_text("tasks: [{id: X")  # malformed
     with pytest.raises(TasksFileError):
         load_tasks(bad)
+
+
+def test_load_tasks_null_tasks_key_raises(tmp_path: Path):
+    """`tasks:` with no value should raise TasksFileError, not TypeError."""
+    bad = tmp_path / "null.yaml"
+    bad.write_text("tasks:\n")
+    with pytest.raises(TasksFileError, match="tasks"):
+        load_tasks(bad)
+
+
+def test_load_tasks_scalar_tasks_key_raises(tmp_path: Path):
+    """`tasks: "hello"` should raise TasksFileError clearly."""
+    bad = tmp_path / "scalar.yaml"
+    bad.write_text("tasks: hello\n")
+    with pytest.raises(TasksFileError, match="tasks"):
+        load_tasks(bad)
+
+
+def test_load_tasks_non_mapping_entry_raises(tmp_path: Path):
+    """List of non-dict entries should raise TasksFileError."""
+    bad = tmp_path / "scalars.yaml"
+    bad.write_text("tasks:\n  - 42\n  - hello\n")
+    with pytest.raises(TasksFileError, match="mapping"):
+        load_tasks(bad)
+
+
+def test_load_tasks_string_deps_raises(tmp_path: Path):
+    """`deps: PHASE0` (string instead of list) must NOT be split into chars."""
+    bad = tmp_path / "bad_deps.yaml"
+    bad.write_text(
+        "tasks:\n"
+        "  - id: F1\n"
+        "    title: x\n"
+        "    stage: F\n"
+        "    deps: PHASE0\n"  # Forgot the brackets!
+    )
+    with pytest.raises(TasksFileError, match="deps"):
+        load_tasks(bad)
