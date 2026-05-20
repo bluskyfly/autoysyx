@@ -1,6 +1,7 @@
 """Run verification steps for a task and classify failures."""
 from __future__ import annotations
 
+import hashlib
 import shlex
 import subprocess
 import tempfile
@@ -8,6 +9,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+
+class ImmutableViolation(Exception):
+    """Raised when an immutable file has been modified or deleted."""
+
+    pass
 
 
 @dataclass
@@ -98,3 +105,26 @@ def run_verification_steps(
         log_path=str(log_path),
         duration_sec=time.monotonic() - start,
     )
+
+
+def hash_file(path: Path) -> str:
+    """Return the SHA256 hex digest of the file at *path*."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def snapshot_immutable_files(paths: list[Path]) -> dict[str, str]:
+    """Compute baseline hashes for files marked immutable for a task."""
+    return {str(p): hash_file(p) for p in paths if Path(p).is_file()}
+
+
+def check_immutable_files(baseline: dict[str, str]) -> list[str]:
+    """Return list of paths that have been modified or deleted since baseline."""
+    violations: list[str] = []
+    for path_str, expected_hash in baseline.items():
+        p = Path(path_str)
+        if not p.exists():
+            violations.append(path_str)
+            continue
+        if hash_file(p) != expected_hash:
+            violations.append(path_str)
+    return violations

@@ -3,7 +3,17 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.verifier import VerifyResult, run_verification_steps
+from orchestrator.verifier import (
+    ImmutableViolation,
+    VerifyResult,
+    check_immutable_files,
+    run_verification_steps,
+)
+
+
+def _hash(p: Path) -> str:
+    import hashlib
+    return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
 def test_passes_when_all_steps_succeed(tmp_path: Path):
@@ -45,3 +55,31 @@ def test_log_path_records_full_output(tmp_path: Path):
     assert result.log_path is not None
     text = Path(result.log_path).read_text()
     assert "line1" in text and "line2" in text
+
+
+def test_check_immutable_files_passes_when_unmodified(tmp_path: Path):
+    test_file = tmp_path / "tests" / "guard.sh"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text("#!/bin/bash\nexit 0\n")
+    baseline = {str(test_file): _hash(test_file)}
+    # No modification -> no violation
+    violations = check_immutable_files(baseline)
+    assert violations == []
+
+
+def test_check_immutable_files_detects_modification(tmp_path: Path):
+    test_file = tmp_path / "tests" / "guard.sh"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text("original\n")
+    baseline = {str(test_file): _hash(test_file)}
+    test_file.write_text("evil tampering\n")
+    violations = check_immutable_files(baseline)
+    assert violations == [str(test_file)]
+
+
+def test_check_immutable_files_treats_delete_as_violation(tmp_path: Path):
+    f = tmp_path / "f.sh"
+    f.write_text("x\n")
+    baseline = {str(f): _hash(f)}
+    f.unlink()
+    assert check_immutable_files(baseline) == [str(f)]
