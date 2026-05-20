@@ -155,7 +155,8 @@ def run(ctx: click.Context, max_tasks: int) -> None:
                                          "log_excerpt": excerpt[:500]})
                 continue
 
-            # Verifier passed; get git diff and ask codex
+            # Stage all worker changes BEFORE asking codex, so codex sees the real diff.
+            subprocess.run(["git", "add", "-A"], cwd=str(root), check=True)
             diff = subprocess.run(
                 ["git", "diff", "--cached", "HEAD"],
                 cwd=str(root), capture_output=True, text=True
@@ -175,8 +176,6 @@ def run(ctx: click.Context, max_tasks: int) -> None:
             if not review.skipped:
                 db.append_event(type="codex_passed", task_id=nxt.id,
                                 payload={"summary": review.summary[:2000]})
-
-            subprocess.run(["git", "add", "-A"], cwd=str(root), check=True)
             commit_msg = f"{nxt.id}: {nxt.title}"
             subprocess.run(
                 ["git", "commit", "-m", commit_msg, "--allow-empty"],
@@ -193,12 +192,12 @@ def run(ctx: click.Context, max_tasks: int) -> None:
             done_count += 1
             break
         else:
-            # exhausted attempts
+            # exhausted attempts — log failure and keep going so independent chains can proceed
             db.append_event(type="task_failed", task_id=nxt.id,
                             payload={"attempts": attempt_num})
             generate_task_report(db, nxt, reports_dir)
             click.echo(f"  ✗ {nxt.id} FAILED after {attempt_num} attempts", err=True)
-            sys.exit(1)
+            continue
 
 
 @cli.command()

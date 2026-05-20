@@ -77,8 +77,13 @@ def test_full_dry_run_completes_two_tasks(tmp_path, monkeypatch):
     assert (tmp_path / "reports" / "B.md").exists()
 
 
-def test_dry_run_halts_after_max_attempts(tmp_path, monkeypatch):
-    """When worker always returns invalid contract, expect task_failed after 3 attempts."""
+def test_dry_run_marks_failure_and_continues_to_exit_clean(tmp_path, monkeypatch):
+    """After max_attempts, task_failed is recorded but the run exits 0 (not hard-exit 1).
+
+    Bug B fix: an exhausted task no longer terminates the orchestrator with sys.exit(1).
+    Outer loop calls pick_next_task again; with no other ready task, it returns None
+    and exits cleanly via 'all done or blocked'. The operator can `retry` and `resume`.
+    """
     monkeypatch.chdir(tmp_path)
     (tmp_path / "tasks.yaml").write_text("""tasks:
   - id: A
@@ -107,8 +112,55 @@ def test_dry_run_halts_after_max_attempts(tmp_path, monkeypatch):
         spawn.return_value = (0, bad_envelope, "")
         result = CliRunner().invoke(cli, ["run", "--max-tasks", "5"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 0, result.output
+    assert "FAILED" in result.output
+    assert "all done or blocked" in result.output
     from orchestrator.db import Database
     db = Database(tmp_path / "orchestrator" / "state.db")
     assert db.task_status("A") == "failed"
     assert (tmp_path / "reports" / "A-FAILED.md").exists()
+
+
+def test_codex_sees_staged_diff_not_empty(tmp_path, monkeypatch):
+    """Bug A fix: `git add -A` must run BEFORE the codex review, so codex sees real changes.
+
+    Before the fix, `git diff --cached HEAD` ran before any `git add`, so codex always
+    received an empty diff and its reject heuristic was effectively a no-op.
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "tasks.yaml").write_text("""tasks:
+  - id: T
+    title: produce-a-file
+    stage: phase0
+    deps: []
+    verification:
+      type: multi_step
+      steps:
+        - { cmd: "echo 'sentinel-codex-diff' > new_artifact.txt", expect_exit: 0 }
+""")
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "_template.md").write_text("{{ task_id }} {{ title }}")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    # Initial empty commit so `git diff HEAD` has a reference.
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-q", "-m", "init"],
+        cwd=tmp_path, check=True,
+    )
+
+    captured_questions: list[str] = []
+
+    def capture_codex(question: str, *_a, **_kw):
+        captured_questions.append(question)
+        return (0, "Looks good. No issues.", "")
+
+    with patch("orchestrator.worker._spawn_claude") as spawn, \
+         patch("orchestrator.reviewer._run_codex", side_effect=capture_codex):
+        spawn.return_value = (0, _fake_worker_envelope("T"), "")
+        result = CliRunner().invoke(cli, ["run", "--max-tasks", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert len(captured_questions) == 1
+    assert "new_artifact.txt" in captured_questions[0]
+    assert "sentinel-codex-diff" in captured_questions[0]
