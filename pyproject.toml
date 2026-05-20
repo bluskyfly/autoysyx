@@ -1,0 +1,27 @@
+[project]
+name = "autoysyx"
+version = "0.1.0"
+description = "Autonomous YSYX v24.07 completion orchestrator"
+requires-python = ">=3.13"
+dependencies = [
+    "pyyaml>=6.0",
+    "jsonschema>=4.0",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[project.scripts]
+autoysyx = "orchestrator.main:cli"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["orchestrator*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
