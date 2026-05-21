@@ -31,9 +31,13 @@ if [[ -z "$REF_SO" || ! -f "$REF_SO" ]]; then
 fi
 
 # Run NPC simulator with --diff.
-echo "==> running NPC with difftest against $REF_SO"
+# B5b: forward PIPELINE env var so PIPELINE=1 picks the cpu_pipeline top
+# (instead of single-cycle cpu.v). Default PIPELINE=0 keeps old D5 behaviour.
+PIPELINE="${PIPELINE:-0}"
+echo "==> running NPC with difftest against $REF_SO (PIPELINE=$PIPELINE)"
 cd "$NPC_HOME"
-make sim ARGS="--diff=$REF_SO --image=$IMAGE" \
+rm -rf build/obj_dir build/npc
+make sim PIPELINE="$PIPELINE" ARGS="--diff=$REF_SO --image=$IMAGE" \
     > /tmp/difftest-run.log 2>&1 || true
 
 if grep -q "DIFFTEST: failed" /tmp/difftest-run.log; then
