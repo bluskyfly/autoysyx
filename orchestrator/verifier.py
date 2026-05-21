@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shlex
 import subprocess
 import tempfile
@@ -11,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from .tasks import Task
+
+# Bound recursive-make parallelism so verifier `make` calls don't fork-bomb
+# the box like worker subprocesses did before (see orchestrator/worker.py).
+_VERIFIER_MAKEFLAGS = "-j 4"
 
 
 class ImmutableViolation(Exception):
@@ -37,6 +42,8 @@ def _run_step(
     """Run one step. Return (exit_code, combined_output, timed_out)."""
     cmd = step["cmd"]
     timeout = int(step.get("timeout_sec", 1800))
+    env = os.environ.copy()
+    env["MAKEFLAGS"] = _VERIFIER_MAKEFLAGS  # cap recursive make fan-out
     with log_file.open("a", encoding="utf-8") as fh:
         fh.write(f"\n$ {cmd}\n")
         fh.flush()
@@ -45,6 +52,7 @@ def _run_step(
                 cmd,
                 shell=True,
                 cwd=str(cwd),
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=timeout,

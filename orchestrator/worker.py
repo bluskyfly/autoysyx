@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -10,6 +11,13 @@ from typing import Any
 
 from .contract import ContractError, extract_contract
 from .tasks import Task
+
+# Cap make/sh recursion fan-out. ysyx-workbench (NEMU PA2 cputest etc.) uses
+# recursive `$(MAKE)` across 40+ test programs; without an upper bound make
+# greedily forked tens of thousands of sh+make children, exhausting swap and
+# OOM-killing the box. -j 4 keeps build throughput sane while guaranteeing
+# bounded resident-set growth.
+_WORKER_MAKEFLAGS = "-j 4"
 
 
 class WorkerTimeout(Exception):
@@ -36,6 +44,8 @@ def _spawn_claude(
     timeout_sec: int,
 ) -> tuple[int, str, str]:
     """Run claude CLI; return (exit_code, stdout, stderr). Raises WorkerTimeout."""
+    env = os.environ.copy()
+    env["MAKEFLAGS"] = _WORKER_MAKEFLAGS  # propagates to any nested `make` worker spawns
     try:
         proc = subprocess.run(
             args,
@@ -43,6 +53,7 @@ def _spawn_claude(
             capture_output=True,
             text=True,
             cwd=str(cwd),
+            env=env,
             timeout=timeout_sec,
             check=False,
         )
