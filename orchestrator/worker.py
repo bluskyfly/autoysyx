@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import resource
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -12,12 +13,24 @@ from typing import Any
 from .contract import ContractError, extract_contract
 from .tasks import Task
 
-# Cap make/sh recursion fan-out. ysyx-workbench (NEMU PA2 cputest etc.) uses
-# recursive `$(MAKE)` across 40+ test programs; without an upper bound make
-# greedily forked tens of thousands of sh+make children, exhausting swap and
-# OOM-killing the box. -j 4 keeps build throughput sane while guaranteeing
-# bounded resident-set growth.
-_WORKER_MAKEFLAGS = "-j 4"
+# Force true serial recursion. -j 4 still yielded 4^N processes for N-level
+# recursive $(MAKE) (PA2 cputest fork-bombed the box to ~330k procs and the
+# cgroup pids controller started rejecting forks across the whole user slice,
+# crashing GNOME). -j 1 keeps every nested make in lockstep.
+_WORKER_MAKEFLAGS = "-j 1"
+# Belt-and-suspenders: hard RLIMIT_NPROC for the worker subtree so a runaway
+# Makefile gets EAGAIN from fork() instead of taking the user slice down.
+# Baseline user procs ~22; 4000 gives huge headroom for legitimate parallel
+# tool use while still firing well below the cgroup ceiling.
+_WORKER_RLIMIT_NPROC = 4000
+
+
+def _apply_worker_rlimits() -> None:
+    """Set RLIMIT_NPROC on the child after fork(), before exec()."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    target = _WORKER_RLIMIT_NPROC
+    new_hard = min(hard, target) if hard != resource.RLIM_INFINITY else target
+    resource.setrlimit(resource.RLIMIT_NPROC, (target, new_hard))
 
 
 class WorkerTimeout(Exception):
@@ -56,6 +69,7 @@ def _spawn_claude(
             env=env,
             timeout=timeout_sec,
             check=False,
+            preexec_fn=_apply_worker_rlimits,
         )
     except subprocess.TimeoutExpired as e:
         raise WorkerTimeout(f"claude CLI timed out after {timeout_sec}s") from e

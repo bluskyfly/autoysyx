@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import resource
 import shlex
 import subprocess
 import tempfile
@@ -13,9 +14,19 @@ from typing import Any
 
 from .tasks import Task
 
-# Bound recursive-make parallelism so verifier `make` calls don't fork-bomb
-# the box like worker subprocesses did before (see orchestrator/worker.py).
-_VERIFIER_MAKEFLAGS = "-j 4"
+# Force serial recursion (see orchestrator/worker.py for the full why).
+# -j 4 looked safe but 4^N recursive $(MAKE) still saturated the cgroup pids
+# controller and rebooted the box; -j 1 is the only safe ceiling here.
+_VERIFIER_MAKEFLAGS = "-j 1"
+_VERIFIER_RLIMIT_NPROC = 4000
+
+
+def _apply_verifier_rlimits() -> None:
+    """Set RLIMIT_NPROC on the child after fork(), before exec()."""
+    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    target = _VERIFIER_RLIMIT_NPROC
+    new_hard = min(hard, target) if hard != resource.RLIM_INFINITY else target
+    resource.setrlimit(resource.RLIMIT_NPROC, (target, new_hard))
 
 
 class ImmutableViolation(Exception):
@@ -57,6 +68,7 @@ def _run_step(
                 text=True,
                 timeout=timeout,
                 check=False,
+                preexec_fn=_apply_verifier_rlimits,
             )
         except subprocess.TimeoutExpired as e:
             fh.write(f"\n[TIMEOUT after {timeout}s]\n")
