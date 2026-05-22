@@ -10,7 +10,6 @@ htmlcov/
 orchestrator/state.db
 orchestrator/state.db-journal
 tools/env-lock.yaml
-ysyx-workbench/
 reports/
 .humanize/
 .cache/

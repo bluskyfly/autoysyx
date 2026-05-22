@@ -1,0 +1,3 @@
+[submodule "ysyx-workbench"]
+	path = ysyx-workbench
+	url = git@github.com:curryfromuestc/ysyx-workbench.git
