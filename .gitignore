@@ -21,3 +21,11 @@ out/
 tools/bootstrap.log
 escalations/
 prompts/_hints/
+
+# Local tool downloads/build outputs
+tools/oss-cad-suite/
+tools/oss-cad-suite-linux-x64-*.tgz
+tools/oss-cad-suite-url.txt
+tools/yosys-src/
+tools/yosys-local/
+tools/bin/

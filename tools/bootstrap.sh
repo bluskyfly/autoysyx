@@ -55,7 +55,7 @@ fi
 # 6. smoke test
 log "smoke: verilator + yosys"
 verilator --version | tee -a "$LOG"
-yosys --version | tee -a "$LOG"
+yosys -V | tee -a "$LOG"
 # riscv32-unknown-elf 不在 Ubuntu 仓库, 需操作员手动准备 (xPack 或源码构建)
 # orchestrator 后续会通过 env-lock 检测是否就绪, 这里不强制 smoke
 log "note: riscv32-unknown-elf toolchain must be installed manually (xPack or build from source) — orchestrator will detect via env-lock"
