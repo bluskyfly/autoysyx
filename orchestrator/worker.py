@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import resource
 import shlex
 import subprocess
+import time
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +39,63 @@ def _apply_worker_rlimits() -> None:
 
 class WorkerTimeout(Exception):
     """Raised when the claude CLI subprocess exceeds its timeout."""
+
+
+class SessionLimitError(Exception):
+    """Raised when claude session quota is exhausted. Carries the UTC datetime
+    at which the orchestrator should retry the same attempt."""
+
+    def __init__(self, message: str, retry_at: datetime):
+        super().__init__(message)
+        self.retry_at = retry_at
+
+
+# Matches e.g.  "session limit · resets 6am (Asia/Shanghai)"
+#               "session limit. resets 11:30pm (UTC)"
+#               "session limit - resets at 6 AM"
+# Trigger phrases that mean "claude is rate-limited". Match any.
+_SESSION_LIMIT_TRIGGERS = ("session limit", "usage limit")
+# Time extractor used after trigger fires. DOTALL so a newline between the
+# trigger phrase and the reset time doesn't break the match.
+_SESSION_LIMIT_RE = re.compile(
+    r"reset(?:s)?(?:\s+at)?\s+"
+    r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)?(?:\s*\(([^)]+)\))?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _parse_session_limit(text: str) -> datetime | None:
+    """Detect claude's session-limit notice; return the UTC retry instant.
+
+    None if the text isn't a session-limit message at all. Falls back to
+    now+30min if it's recognised as session-limit but the time can't be
+    parsed, so a wording change doesn't turn into a tight retry loop."""
+    low = (text or "").lower()
+    if not low:
+        return None
+    if not any(t in low for t in _SESSION_LIMIT_TRIGGERS):
+        return None
+    m = _SESSION_LIMIT_RE.search(text)
+    if not m:
+        return datetime.now(timezone.utc) + timedelta(minutes=30)
+    hour = int(m.group(1))
+    minute = int(m.group(2) or 0)
+    ampm = (m.group(3) or "").lower()
+    tz_name = m.group(4) or "UTC"
+    if ampm == "pm" and hour < 12:
+        hour += 12
+    elif ampm == "am" and hour == 12:
+        hour = 0
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("UTC")
+    now_local = datetime.now(tz)
+    target = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now_local:
+        target += timedelta(days=1)
+    return target.astimezone(timezone.utc)
+
 
 
 @dataclass
@@ -103,6 +164,18 @@ def run_worker(
 
     exit_code, stdout, stderr = _spawn_claude(args, "", work_dir, timeout_sec)
 
+    # Early session-limit detection on raw output. Claude sometimes prints
+    # the limit notice as plain text (non-JSON), which would bypass the
+    # post-parse detection further down. Check raw stdout+stderr first.
+    _early_haystack = " ".join(filter(None, [stdout, stderr]))
+    _early_retry_at = _parse_session_limit(_early_haystack)
+    if _early_retry_at is not None:
+        raise SessionLimitError(
+            f"claude session limit hit; retry at {_early_retry_at.isoformat()}",
+            retry_at=_early_retry_at,
+        )
+
+
     # claude CLI JSON wrapper
     try:
         envelope = json.loads(stdout)
@@ -131,6 +204,16 @@ def run_worker(
             contract = extract_contract(result_text)
         except ContractError as e:
             contract_error = str(e)
+
+    # Session-limit detection: claude refused us due to quota exhaustion.
+    # Raise so the main loop can sleep instead of burning an attempt.
+    _haystack = " ".join(filter(None, [api_error, result_text]))
+    _retry_at = _parse_session_limit(_haystack)
+    if _retry_at is not None:
+        raise SessionLimitError(
+            f"claude session limit hit; retry at {_retry_at.isoformat()}",
+            retry_at=_retry_at,
+        )
 
     return WorkerResult(
         exit_code=exit_code,

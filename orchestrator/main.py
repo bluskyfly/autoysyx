@@ -111,7 +111,7 @@ def resume(ctx: click.Context) -> None:
 @click.pass_context
 def run(ctx: click.Context, max_tasks: int) -> None:
     """Run tasks one at a time until done, failed, or interrupted."""
-    from .worker import run_worker, assemble_prompt
+    from .worker import run_worker, assemble_prompt, SessionLimitError
     from .verifier import verify_task, snapshot_immutable_files
     from .reviewer import review_diff
     from .reporter import generate_task_report
@@ -154,6 +154,76 @@ def run(ctx: click.Context, max_tasks: int) -> None:
                     work_dir=root,
                     add_dirs=[root / "docs-md", root / "ysyx-workbench"],
                 )
+            except SessionLimitError as e:
+                # Quota exhaustion: don't burn an attempt. Sleep until
+                # claude's stated reset time, then redo this same attempt.
+                import time as _t, json as _json, sys as _sys
+                from datetime import datetime as _dt, timezone as _tz
+                from zoneinfo import ZoneInfo as _ZI
+                _SH = _ZI("Asia/Shanghai")
+                attempt_num -= 1  # cancel this iteration's increment
+                db.append_event(type="session_limit_wait", task_id=nxt.id,
+                                payload={"retry_at": e.retry_at.isoformat(),
+                                         "attempt_num": attempt_num + 1})
+                retry_at = e.retry_at
+                total_sec = max(60.0,
+                                (retry_at - _dt.now(_tz.utc)).total_seconds() + 60)
+                local_retry = retry_at.astimezone(_SH)
+                click.secho(
+                    f"\n  ⏸  {nxt.id}: claude session limit hit\n"
+                    f"     attempt {attempt_num + 1}/{nxt.max_attempts} will resume at "
+                    f"{local_retry.strftime('%Y-%m-%d %H:%M:%S')} (Asia/Shanghai)\n"
+                    f"     ({int(total_sec)//60} min total, +60s buffer)\n"
+                    f"     orchestrator is SLEEPING, not crashed. Ctrl+C to abort.",
+                    fg="yellow",
+                )
+                waiting_path = root / "state" / "waiting.json"
+                waiting_path.parent.mkdir(exist_ok=True)
+                waiting_path.write_text(_json.dumps({
+                    "task_id": nxt.id,
+                    "reason": "session_limit",
+                    "retry_at_utc": retry_at.isoformat(),
+                    "retry_at_shanghai": local_retry.isoformat(),
+                    "sleep_started_utc": _dt.now(_tz.utc).isoformat(),
+                    "total_sec": int(total_sec),
+                }, indent=2))
+                remaining = total_sec
+                is_tty = _sys.stdout.isatty()
+                while remaining > 0:
+                    chunk = min(60.0, remaining)
+                    if is_tty:
+                        mins, secs = divmod(int(remaining), 60)
+                        hrs, mins = divmod(mins, 60)
+                        click.echo(
+                            f"\r     ⏳ {hrs:02d}:{mins:02d}:{secs:02d} "
+                            f"remaining (resume at "
+                            f"{local_retry.strftime('%H:%M:%S')} 上海时间)    ",
+                            nl=False,
+                        )
+                    _t.sleep(chunk)
+                    remaining -= chunk
+                if is_tty:
+                    click.echo("")
+                try:
+                    waiting_path.unlink()
+                except FileNotFoundError:
+                    pass
+                db.append_event(type="session_limit_resume", task_id=nxt.id,
+                                payload={"attempt_num": attempt_num + 1})
+                click.secho(f"  ▶ {nxt.id}: resuming attempt {attempt_num + 1}",
+                            fg="green")
+                # Tell the next iteration's prompt that this isn't a real
+                # failure but a resumed run, so claude reconnects with WIP
+                # files in workspace instead of starting from scratch.
+                prior_errors.append(
+                    f"NOTICE: previous run of {nxt.id} was interrupted by "
+                    f"claude session limit (not a real failure). Partial "
+                    f"work-in-progress files may exist in the workspace. "
+                    f"Inspect workspace state first (git status, ls work_dir), "
+                    f"then continue from where you left off rather than "
+                    f"starting from scratch."
+                )
+                continue
             except Exception as e:
                 # Bug F: WorkerTimeout (or any worker-spawn crash) was
                 # propagating out of run() and killing the whole orchestrator.
